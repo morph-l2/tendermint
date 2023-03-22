@@ -1,10 +1,12 @@
 package blssignatures
 
 import (
+	"encoding/hex"
 	"math/rand"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"github.com/tendermint/tendermint/blssignatures/util"
 )
 
@@ -135,6 +137,18 @@ func TestSignatureAggregationDifferentMessages(t *testing.T) {
 	if !verified {
 		Fail(t, "First aggregated signature check failed")
 	}
+}
+
+func TestGenerateKeys(t *testing.T) {
+	pub, priv, err := GenerateKeys()
+	require.NoError(t, err)
+	privKeyBytes := PrivateKeyToBytes(priv)
+	pubKeyBytes := PublicKeyToBytes(pub)
+
+	println("PrivKey:")
+	println(hex.EncodeToString(privKeyBytes))
+	println("PubKey:")
+	println(hex.EncodeToString(pubKeyBytes))
 }
 
 func Require(t *testing.T, err error, printables ...interface{}) {

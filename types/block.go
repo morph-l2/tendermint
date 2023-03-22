@@ -993,10 +993,15 @@ type Data struct {
 	// This means that block.AppHash does not include these txs.
 	Txs Txs `json:"txs"`
 
+	TxsSignature    tmbytes.HexBytes
+	Config          tmbytes.HexBytes
+	ConfigSignature tmbytes.HexBytes
+
 	// Volatile
 	hash tmbytes.HexBytes
 }
 
+// TODO
 // Hash returns the hash of the data
 func (data *Data) Hash() tmbytes.HexBytes {
 	if data == nil {

@@ -49,6 +49,7 @@ var (
 
 	defaultNodeKeyName  = "node_key.json"
 	defaultAddrBookName = "addrbook.json"
+	defaultBLSKeyName   = "bls_key.json"
 
 	defaultConfigFilePath   = filepath.Join(defaultConfigDir, defaultConfigFileName)
 	defaultGenesisJSONPath  = filepath.Join(defaultConfigDir, defaultGenesisJSONName)
@@ -57,6 +58,7 @@ var (
 
 	defaultNodeKeyPath  = filepath.Join(defaultConfigDir, defaultNodeKeyName)
 	defaultAddrBookPath = filepath.Join(defaultConfigDir, defaultAddrBookName)
+	defaultBLSKeyPath   = filepath.Join(defaultConfigDir, defaultBLSKeyName)
 
 	minSubscriptionBufferSize     = 100
 	defaultSubscriptionBufferSize = 200
@@ -239,6 +241,9 @@ type BaseConfig struct { //nolint: maligned
 	// A JSON file containing the private key to use for p2p authenticated encryption
 	NodeKey string `mapstructure:"node_key_file"`
 
+	// Path to the JSON file containing bls key
+	BLSKey string `mapstructure:"bls_key_file"`
+
 	// Mechanism to connect to the ABCI application: socket | grpc
 	ABCI string `mapstructure:"abci"`
 
@@ -254,6 +259,7 @@ func DefaultBaseConfig() BaseConfig {
 		PrivValidatorKey:   defaultPrivValKeyPath,
 		PrivValidatorState: defaultPrivValStatePath,
 		NodeKey:            defaultNodeKeyPath,
+		BLSKey:             defaultBLSKeyPath,
 		Moniker:            defaultMoniker,
 		ProxyApp:           "tcp://127.0.0.1:26658",
 		ABCI:               "socket",
@@ -298,6 +304,11 @@ func (cfg BaseConfig) PrivValidatorStateFile() string {
 // NodeKeyFile returns the full path to the node_key.json file
 func (cfg BaseConfig) NodeKeyFile() string {
 	return rootify(cfg.NodeKey, cfg.RootDir)
+}
+
+// BLSPrivKeyFile returns the full path to the bls_priv_key.json file
+func (cfg BaseConfig) BLSKeyFile() string {
+	return rootify(cfg.BLSKey, cfg.RootDir)
 }
 
 // DBDir returns the full path to the database directory

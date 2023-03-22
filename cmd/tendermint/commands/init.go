@@ -5,6 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/tendermint/tendermint/blssignatures"
 	cfg "github.com/tendermint/tendermint/config"
 	tmos "github.com/tendermint/tendermint/libs/os"
 	tmrand "github.com/tendermint/tendermint/libs/rand"
@@ -49,6 +50,18 @@ func initFilesWithConfig(config *cfg.Config) error {
 			return err
 		}
 		logger.Info("Generated node key", "path", nodeKeyFile)
+	}
+
+	// bls key
+	blsKeyFile := config.BLSKeyFile()
+	var bls *blssignatures.FileBLSKey
+	if tmos.FileExists(blsKeyFile) {
+		bls = blssignatures.LoadBLSKey(blsKeyFile)
+		logger.Info("Found bls private key", "path", blsKeyFile)
+	} else {
+		bls = blssignatures.GenFileBLSKey()
+		bls.Save(blsKeyFile)
+		logger.Info("Generated bls key", "path", blsKeyFile)
 	}
 
 	// genesis file
