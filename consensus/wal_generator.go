@@ -12,6 +12,7 @@ import (
 	db "github.com/tendermint/tm-db"
 
 	"github.com/tendermint/tendermint/abci/example/kvstore"
+	"github.com/tendermint/tendermint/blssignatures"
 	cfg "github.com/tendermint/tendermint/config"
 	"github.com/tendermint/tendermint/libs/log"
 	tmrand "github.com/tendermint/tendermint/libs/rand"
@@ -90,6 +91,13 @@ func WALGenerateNBlocks(t *testing.T, wr io.Writer, numBlocks int) (err error) {
 	consensusState.SetEventBus(eventBus)
 	if privValidator != nil {
 		consensusState.SetPrivValidator(privValidator)
+	}
+	blsPrivKey, err := blssignatures.PrivateKeyFromBytes(blssignatures.LoadBLSKey(config.BLSKeyFile()).PrivKey)
+	if err != nil {
+		t.Error(err)
+	}
+	if privValidator != nil {
+		consensusState.SetBLSPrivKey(&blsPrivKey)
 	}
 	// END OF COPY PASTE
 

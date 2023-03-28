@@ -87,6 +87,8 @@ message Data {
   // NOTE: not all txs here are valid.  We're just agreeing on the order first.
   // This means that block.AppHash does not include these txs.
   repeated bytes txs = 1;
+
+  bytes config = 2;
 }
 
 // Vote represents a prevote, precommit, or commit vote from validators for
@@ -102,6 +104,7 @@ message Vote {
   bytes validator_address = 6;
   int32 validator_index   = 7;
   bytes signature         = 8;
+  bytes bls_signature     = 9 [(gogoproto.customname) = "BLSSignature"];
 }
 
 // Commit contains the evidence that a block was committed by a set of validators.
@@ -118,7 +121,8 @@ message CommitSig {
   bytes                     validator_address = 2;
   google.protobuf.Timestamp timestamp         = 3
       [(gogoproto.nullable) = false, (gogoproto.stdtime) = true];
-  bytes signature = 4;
+  bytes signature     = 4;
+  bytes bls_signature = 5 [(gogoproto.customname) = "BLSSignature"];
 }
 
 message Proposal {

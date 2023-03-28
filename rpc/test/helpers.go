@@ -9,6 +9,7 @@ import (
 	"time"
 
 	abci "github.com/tendermint/tendermint/abci/types"
+	"github.com/tendermint/tendermint/blssignatures"
 	"github.com/tendermint/tendermint/libs/log"
 
 	cfg "github.com/tendermint/tendermint/config"
@@ -162,16 +163,28 @@ func NewTendermint(app abci.Application, opts *Options) *nm.Node {
 	pvKeyFile := config.PrivValidatorKeyFile()
 	pvKeyStateFile := config.PrivValidatorStateFile()
 	pv := privval.LoadOrGenFilePV(pvKeyFile, pvKeyStateFile)
+
+	blsPrivKey, err := blssignatures.PrivateKeyFromBytes(blssignatures.LoadBLSKey(config.BLSKeyFile()).PrivKey)
+	if err != nil {
+		panic(err)
+	}
+
 	papp := proxy.NewLocalClientCreator(app)
 	nodeKey, err := p2p.LoadOrGenNodeKey(config.NodeKeyFile())
 	if err != nil {
 		panic(err)
 	}
-	node, err := nm.NewNode(config, pv, nodeKey, papp,
+	node, err := nm.NewNode(
+		config,
+		pv,
+		&blsPrivKey,
+		nodeKey,
+		papp,
 		nm.DefaultGenesisDocProviderFunc(config),
 		nm.DefaultDBProvider,
 		nm.DefaultMetricsProvider(config.Instrumentation),
-		logger)
+		logger,
+	)
 	if err != nil {
 		panic(err)
 	}

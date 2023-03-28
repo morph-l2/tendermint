@@ -17,13 +17,14 @@ import (
 
 	abci "github.com/tendermint/tendermint/abci/types"
 	bc "github.com/tendermint/tendermint/blocksync"
+	"github.com/tendermint/tendermint/blssignatures"
 	cfg "github.com/tendermint/tendermint/config"
 	cs "github.com/tendermint/tendermint/consensus"
 	"github.com/tendermint/tendermint/crypto"
 	"github.com/tendermint/tendermint/evidence"
-
 	tmjson "github.com/tendermint/tendermint/libs/json"
 	"github.com/tendermint/tendermint/libs/log"
+	tmos "github.com/tendermint/tendermint/libs/os"
 	tmpubsub "github.com/tendermint/tendermint/libs/pubsub"
 	"github.com/tendermint/tendermint/libs/service"
 	"github.com/tendermint/tendermint/light"
@@ -101,8 +102,19 @@ func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
 		return nil, fmt.Errorf("failed to load or gen node key %s: %w", config.NodeKeyFile(), err)
 	}
 
-	return NewNode(config,
+	if !tmos.FileExists(config.BLSKey) {
+		blssignatures.GenFileBLSKey().Save(config.BLSKeyFile())
+	}
+
+	blsPrivKey, err := blssignatures.PrivateKeyFromBytes(blssignatures.LoadBLSKey(config.BLSKeyFile()).PrivKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load bls priv key")
+	}
+
+	return NewNode(
+		config,
 		privval.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile()),
+		&blsPrivKey,
 		nodeKey,
 		proxy.DefaultClientCreator(config.ProxyApp, config.ABCI, config.DBDir()),
 		DefaultGenesisDocProviderFunc(config),
@@ -199,6 +211,7 @@ type Node struct {
 	config        *cfg.Config
 	genesisDoc    *types.GenesisDoc   // initial validator set
 	privValidator types.PrivValidator // local node's validator key
+	blsPrivKey    blssignatures.PrivateKey
 
 	// network
 	transport   *p2p.MultiplexTransport
@@ -459,13 +472,15 @@ func createBlockchainReactor(config *cfg.Config,
 	return bcReactor, nil
 }
 
-func createConsensusReactor(config *cfg.Config,
+func createConsensusReactor(
+	config *cfg.Config,
 	state sm.State,
 	blockExec *sm.BlockExecutor,
 	blockStore sm.BlockStore,
 	mempool mempl.Mempool,
 	evidencePool *evidence.Pool,
 	privValidator types.PrivValidator,
+	blsPrivKey *blssignatures.PrivateKey,
 	csMetrics *cs.Metrics,
 	waitSync bool,
 	eventBus *types.EventBus,
@@ -483,6 +498,9 @@ func createConsensusReactor(config *cfg.Config,
 	consensusState.SetLogger(consensusLogger)
 	if privValidator != nil {
 		consensusState.SetPrivValidator(privValidator)
+	}
+	if blsPrivKey != nil {
+		consensusState.SetBLSPrivKey(blsPrivKey)
 	}
 	consensusReactor := cs.NewReactor(consensusState, waitSync, cs.ReactorMetrics(csMetrics))
 	consensusReactor.SetLogger(consensusLogger)
@@ -700,8 +718,10 @@ func startStateSync(ssR *statesync.Reactor, bcR blockSyncReactor, conR *cs.React
 }
 
 // NewNode returns a new, ready to go, Tendermint Node.
-func NewNode(config *cfg.Config,
+func NewNode(
+	config *cfg.Config,
 	privValidator types.PrivValidator,
+	blsPrivKey *blssignatures.PrivateKey,
 	nodeKey *p2p.NodeKey,
 	clientCreator proxy.ClientCreator,
 	genesisDocProvider GenesisDocProvider,
@@ -825,8 +845,9 @@ func NewNode(config *cfg.Config,
 		csMetrics.BlockSyncing.Set(1)
 	}
 	consensusReactor, consensusState := createConsensusReactor(
-		config, state, blockExec, blockStore, mempool, evidencePool,
-		privValidator, csMetrics, stateSync || blockSync, eventBus, consensusLogger,
+		config, state, blockExec, blockStore, mempool,
+		evidencePool, privValidator, blsPrivKey, csMetrics,
+		stateSync || blockSync, eventBus, consensusLogger,
 	)
 
 	// Set up state sync reactor, and schedule a sync if requested.
@@ -900,6 +921,7 @@ func NewNode(config *cfg.Config,
 		config:        config,
 		genesisDoc:    genDoc,
 		privValidator: privValidator,
+		blsPrivKey:    *blsPrivKey,
 
 		transport: transport,
 		sw:        sw,

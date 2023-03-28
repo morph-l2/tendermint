@@ -598,15 +598,22 @@ type CommitSig struct {
 	ValidatorAddress Address     `json:"validator_address"`
 	Timestamp        time.Time   `json:"timestamp"`
 	Signature        []byte      `json:"signature"`
+	BLSSignature     []byte      `json:"bls_signature"`
 }
 
 // NewCommitSigForBlock returns new CommitSig with BlockIDFlagCommit.
-func NewCommitSigForBlock(signature []byte, valAddr Address, ts time.Time) CommitSig {
+func NewCommitSigForBlock(
+	signature []byte,
+	valAddr Address,
+	ts time.Time,
+	blsSignature []byte,
+) CommitSig {
 	return CommitSig{
 		BlockIDFlag:      BlockIDFlagCommit,
 		ValidatorAddress: valAddr,
 		Timestamp:        ts,
 		Signature:        signature,
+		BLSSignature:     blsSignature,
 	}
 }
 
@@ -641,11 +648,13 @@ func (cs CommitSig) Absent() bool {
 // 3. block ID flag
 // 4. timestamp
 func (cs CommitSig) String() string {
-	return fmt.Sprintf("CommitSig{%X by %X on %v @ %s}",
+	return fmt.Sprintf("CommitSig{%X by %X on %v @ %s, BLSSig %X}",
 		tmbytes.Fingerprint(cs.Signature),
 		tmbytes.Fingerprint(cs.ValidatorAddress),
 		cs.BlockIDFlag,
-		CanonicalTime(cs.Timestamp))
+		CanonicalTime(cs.Timestamp),
+		tmbytes.Fingerprint(cs.BLSSignature),
+	)
 }
 
 // BlockID returns the Commit's BlockID if CommitSig indicates signing,
@@ -686,6 +695,7 @@ func (cs CommitSig) ValidateBasic() error {
 		if len(cs.Signature) != 0 {
 			return errors.New("signature is present")
 		}
+		// TODO
 	default:
 		if len(cs.ValidatorAddress) != crypto.AddressSize {
 			return fmt.Errorf("expected ValidatorAddress size to be %d bytes, got %d bytes",
@@ -700,6 +710,7 @@ func (cs CommitSig) ValidateBasic() error {
 		if len(cs.Signature) > MaxSignatureSize {
 			return fmt.Errorf("signature is too big (max: %d)", MaxSignatureSize)
 		}
+		// TODO
 	}
 
 	return nil
@@ -993,9 +1004,7 @@ type Data struct {
 	// This means that block.AppHash does not include these txs.
 	Txs Txs `json:"txs"`
 
-	TxsSignature    tmbytes.HexBytes
-	Config          tmbytes.HexBytes
-	ConfigSignature tmbytes.HexBytes
+	Config tmbytes.HexBytes
 
 	// Volatile
 	hash tmbytes.HexBytes
@@ -1010,7 +1019,10 @@ func (data *Data) Hash() tmbytes.HexBytes {
 	if data.hash == nil {
 		data.hash = data.Txs.Hash() // NOTE: leaves of merkle tree are TxIDs
 	}
-	return data.hash
+	return merkle.HashFromByteSlices([][]byte{
+		data.hash,
+		tmhash.Sum(data.Config),
+	})
 }
 
 // StringIndented returns an indented string representation of the transactions.

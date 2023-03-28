@@ -56,6 +56,7 @@ type Vote struct {
 	ValidatorAddress Address               `json:"validator_address"`
 	ValidatorIndex   int32                 `json:"validator_index"`
 	Signature        []byte                `json:"signature"`
+	BLSSignature     []byte                `json:"bls_signature"`
 }
 
 // CommitSig converts the Vote to a CommitSig.
@@ -79,6 +80,7 @@ func (vote *Vote) CommitSig() CommitSig {
 		ValidatorAddress: vote.ValidatorAddress,
 		Timestamp:        vote.Timestamp,
 		Signature:        vote.Signature,
+		BLSSignature:     vote.BLSSignature,
 	}
 }
 

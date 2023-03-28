@@ -83,6 +83,7 @@ func MakeCommit(blockID types.BlockID, height int64, round int32, valSet *types.
 			ValidatorAddress: addr,
 			Timestamp:        now,
 			Signature:        v.Signature,
+			BLSSignature:     v.BLSSignature,
 		}
 	}
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/cosmos/gogoproto/proto"
 
+	"github.com/tendermint/tendermint/blssignatures"
 	cfg "github.com/tendermint/tendermint/config"
 	cstypes "github.com/tendermint/tendermint/consensus/types"
 	"github.com/tendermint/tendermint/crypto"
@@ -81,6 +82,7 @@ type State struct {
 	// config details
 	config        *cfg.ConsensusConfig
 	privValidator types.PrivValidator // for signing votes
+	blsPrivKey    *blssignatures.PrivateKey
 
 	// store blocks and commits
 	blockStore sm.BlockStore
@@ -272,6 +274,13 @@ func (cs *State) SetPrivValidator(priv types.PrivValidator) {
 	if err := cs.updatePrivValidatorPubKey(); err != nil {
 		cs.Logger.Error("failed to get private validator pubkey", "err", err)
 	}
+}
+
+func (cs *State) SetBLSPrivKey(bls *blssignatures.PrivateKey) {
+	cs.mtx.Lock()
+	defer cs.mtx.Unlock()
+
+	cs.blsPrivKey = bls
 }
 
 // SetTimeoutTicker sets the local timer. It may be useful to overwrite for
@@ -1030,11 +1039,10 @@ func (cs *State) enterNewRound(height int64, round int32) {
 	// Wait for txs to be available in the mempool
 	// before we enterPropose in round 0. If the last block changed the app hash,
 	// we may need an empty "proof" block, and enterPropose immediately.
-	waitForTxs := cs.config.WaitForTxs() && round == 0 && !cs.needProofBlock(height)
+	waitForTxs := cs.config.WaitForTxs() && round == 0 && height != cs.state.InitialHeight
 	if waitForTxs {
 		if cs.config.CreateEmptyBlocksInterval > 0 {
-			cs.scheduleTimeout(cs.config.CreateEmptyBlocksInterval, height, round,
-				cstypes.RoundStepNewRound)
+			cs.scheduleTimeout(cs.config.CreateEmptyBlocksInterval, height, round, cstypes.RoundStepNewRound)
 		}
 	} else {
 		cs.enterPropose(height, round)
@@ -2256,11 +2264,20 @@ func (cs *State) signVote(
 	}
 
 	v := vote.ToProto()
-	err := cs.privValidator.SignVote(cs.state.ChainID, v)
+	if err := cs.privValidator.SignVote(cs.state.ChainID, v); err != nil {
+		return nil, err
+	}
 	vote.Signature = v.Signature
 	vote.Timestamp = v.Timestamp
 
-	return vote, err
+	// Sign block data
+	sig, err := blssignatures.SignMessage(*cs.blsPrivKey, cs.blockStore.LoadBlock(cs.Height).DataHash)
+	if err != nil {
+		return nil, err
+	}
+	vote.BLSSignature = blssignatures.SignatureToBytes(sig)
+
+	return vote, nil
 }
 
 func (cs *State) voteTime() time.Time {
@@ -2286,6 +2303,9 @@ func (cs *State) voteTime() time.Time {
 
 // sign the vote and publish on internalMsgQueue
 func (cs *State) signAddVote(msgType tmproto.SignedMsgType, hash []byte, header types.PartSetHeader) *types.Vote {
+
+	// TODO check bls key
+
 	if cs.privValidator == nil { // the node does not have a key
 		return nil
 	}
