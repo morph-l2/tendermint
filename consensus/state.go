@@ -1295,8 +1295,7 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 	err := cs.blockExec.ValidateBlock(cs.state, cs.ProposalBlock)
 	if err != nil {
 		// ProposalBlock is invalid, prevote nil.
-		logger.Error("prevote step: consensus deems this block invalid; prevoting nil",
-			"err", err)
+		logger.Error("prevote step: consensus deems this block invalid; prevoting nil", "err", err)
 		cs.signAddVote(tmproto.PrevoteType, nil, types.PartSetHeader{})
 		return
 	}
@@ -2271,7 +2270,11 @@ func (cs *State) signVote(
 	vote.Timestamp = v.Timestamp
 
 	// Sign block data
-	sig, err := blssignatures.SignMessage(*cs.blsPrivKey, cs.blockStore.LoadBlock(cs.Height).DataHash)
+	if cs.ProposalBlock == nil {
+		return vote, nil
+	}
+
+	sig, err := blssignatures.SignMessage(*cs.blsPrivKey, cs.ProposalBlock.Data.Hash())
 	if err != nil {
 		return nil, err
 	}
