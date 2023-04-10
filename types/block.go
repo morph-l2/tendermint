@@ -20,6 +20,8 @@ import (
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	tmversion "github.com/tendermint/tendermint/proto/tendermint/version"
 	"github.com/tendermint/tendermint/version"
+
+	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 )
 
 const (
@@ -1008,9 +1010,10 @@ type Data struct {
 
 	// Volatile
 	hash tmbytes.HexBytes
+
+	zkHash tmbytes.HexBytes
 }
 
-// TODO
 // Hash returns the hash of the data
 func (data *Data) Hash() tmbytes.HexBytes {
 	if data == nil {
@@ -1019,10 +1022,27 @@ func (data *Data) Hash() tmbytes.HexBytes {
 	if data.hash == nil {
 		data.hash = data.Txs.Hash() // NOTE: leaves of merkle tree are TxIDs
 	}
-	return merkle.HashFromByteSlices([][]byte{
-		data.hash,
-		tmhash.Sum(data.Config),
-	})
+	return data.hash
+}
+
+// Hash returns the hash of the data
+func (data *Data) ZKHash() tmbytes.HexBytes {
+	// TODO: handle nil block
+
+	if data.zkHash == nil {
+		var txsBytes []byte
+
+		for _, tx := range data.Txs {
+			txsBytes = append(txsBytes, tx...)
+		}
+
+		data.zkHash = merkle.HashFromByteSlices([][]byte{
+			ethcrypto.Keccak256(txsBytes),
+			ethcrypto.Keccak256(data.Config),
+		})
+
+	}
+	return data.zkHash
 }
 
 // StringIndented returns an indented string representation of the transactions.

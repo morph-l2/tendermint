@@ -2274,7 +2274,7 @@ func (cs *State) signVote(
 		return vote, nil
 	}
 
-	sig, err := blssignatures.SignMessage(*cs.blsPrivKey, cs.ProposalBlock.Data.Hash())
+	sig, err := blssignatures.SignMessage(*cs.blsPrivKey, cs.ProposalBlock.Data.ZKHash())
 	if err != nil {
 		return nil, err
 	}
