@@ -1036,11 +1036,12 @@ func (data *Data) ZKHash() tmbytes.HexBytes {
 			txsBytes = append(txsBytes, tx...)
 		}
 
-		data.zkHash = merkle.HashFromByteSlices([][]byte{
-			ethcrypto.Keccak256(txsBytes),
-			ethcrypto.Keccak256(data.Config),
-		})
-
+		data.zkHash = ethcrypto.Keccak256(
+			append(
+				ethcrypto.Keccak256(txsBytes),
+				ethcrypto.Keccak256(data.Config)...,
+			),
+		)
 	}
 	return data.zkHash
 }
