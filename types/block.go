@@ -1006,7 +1006,8 @@ type Data struct {
 	// This means that block.AppHash does not include these txs.
 	Txs Txs `json:"txs"`
 
-	Config tmbytes.HexBytes
+	L2Config tmbytes.HexBytes
+	ZkConfig tmbytes.HexBytes
 
 	// Volatile
 	hash tmbytes.HexBytes
@@ -1021,6 +1022,10 @@ func (data *Data) Hash() tmbytes.HexBytes {
 	}
 	if data.hash == nil {
 		data.hash = data.Txs.Hash() // NOTE: leaves of merkle tree are TxIDs
+		data.zkHash = merkle.HashFromByteSlices([][]byte{
+			data.Txs.Hash(),
+			tmhash.Sum(data.L2Config),
+		})
 	}
 	return data.hash
 }
@@ -1039,7 +1044,7 @@ func (data *Data) ZKHash() tmbytes.HexBytes {
 		data.zkHash = ethcrypto.Keccak256(
 			append(
 				ethcrypto.Keccak256(txsBytes),
-				ethcrypto.Keccak256(data.Config)...,
+				ethcrypto.Keccak256(data.ZkConfig)...,
 			),
 		)
 	}

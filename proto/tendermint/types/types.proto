@@ -88,7 +88,8 @@ message Data {
   // This means that block.AppHash does not include these txs.
   repeated bytes txs = 1;
 
-  bytes config = 2;
+  bytes l2_config = 2 [(gogoproto.customname) = "L2Config"];
+  bytes zk_config = 3 [(gogoproto.customname) = "ZkConfig"];
 }
 
 // Vote represents a prevote, precommit, or commit vote from validators for
