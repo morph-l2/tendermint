@@ -6,8 +6,8 @@ import (
 	"math/big"
 	"strconv"
 
-	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/scroll-tech/go-ethereum/core/types"
+	"github.com/scroll-tech/go-ethereum/rlp"
 	"github.com/tendermint/tendermint/ethutil/hex"
 )
 

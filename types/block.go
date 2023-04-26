@@ -21,7 +21,7 @@ import (
 	tmversion "github.com/tendermint/tendermint/proto/tendermint/version"
 	"github.com/tendermint/tendermint/version"
 
-	ethcrypto "github.com/ethereum/go-ethereum/crypto"
+	ethcrypto "github.com/scroll-tech/go-ethereum/crypto"
 )
 
 const (

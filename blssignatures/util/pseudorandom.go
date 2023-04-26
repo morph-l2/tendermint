@@ -4,7 +4,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/common"
+	"github.com/scroll-tech/go-ethereum/common"
 )
 
 type PseudoRandomDataSource struct {
