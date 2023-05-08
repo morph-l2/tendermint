@@ -58,8 +58,13 @@ func TestApplyBlock(t *testing.T) {
 		mock.Anything,
 		mock.Anything,
 		mock.Anything).Return(nil)
-	blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyApp.Consensus(),
-		mp, sm.EmptyEvidencePool{})
+	blockExec := sm.NewBlockExecutor(
+		stateStore,
+		log.TestingLogger(),
+		proxyApp.Consensus(),
+		mp,
+		sm.EmptyEvidencePool{},
+	)
 
 	block := makeBlock(state, 1, new(types.Commit))
 	bps, err := block.MakePartSet(testPartSize)
@@ -235,8 +240,7 @@ func TestBeginBlockByzantineValidators(t *testing.T) {
 		mock.Anything,
 		mock.Anything).Return(nil)
 
-	blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyApp.Consensus(),
-		mp, evpool)
+	blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyApp.Consensus(), mp, evpool)
 
 	block := makeBlock(state, 1, new(types.Commit))
 	block.Evidence = types.EvidenceData{Evidence: ev}
@@ -628,7 +632,7 @@ func TestEmptyPrepareProposal(t *testing.T) {
 	pa, _ := state.Validators.GetByIndex(0)
 	commit, err := makeValidCommit(height, types.BlockID{}, state.Validators, privVals)
 	require.NoError(t, err)
-	_, err = blockExec.CreateProposalBlock(height, state, commit, pa)
+	_, err = blockExec.CreateProposalBlock(nil, height, state, commit, pa) // TODO
 	require.NoError(t, err)
 }
 
@@ -669,7 +673,7 @@ func TestPrepareProposalTxsAllIncluded(t *testing.T) {
 	pa, _ := state.Validators.GetByIndex(0)
 	commit, err := makeValidCommit(height, types.BlockID{}, state.Validators, privVals)
 	require.NoError(t, err)
-	block, err := blockExec.CreateProposalBlock(height, state, commit, pa)
+	block, err := blockExec.CreateProposalBlock(nil, height, state, commit, pa) // TODO
 	require.NoError(t, err)
 
 	for i, tx := range block.Data.Txs {
@@ -720,7 +724,7 @@ func TestPrepareProposalReorderTxs(t *testing.T) {
 	pa, _ := state.Validators.GetByIndex(0)
 	commit, err := makeValidCommit(height, types.BlockID{}, state.Validators, privVals)
 	require.NoError(t, err)
-	block, err := blockExec.CreateProposalBlock(height, state, commit, pa)
+	block, err := blockExec.CreateProposalBlock(nil, height, state, commit, pa) // TODO
 	require.NoError(t, err)
 	for i, tx := range block.Data.Txs {
 		require.Equal(t, txs[i], tx)
@@ -774,7 +778,7 @@ func TestPrepareProposalErrorOnTooManyTxs(t *testing.T) {
 	commit, err := makeValidCommit(height, types.BlockID{}, state.Validators, privVals)
 	require.NoError(t, err)
 
-	block, err := blockExec.CreateProposalBlock(height, state, commit, pa)
+	block, err := blockExec.CreateProposalBlock(nil, height, state, commit, pa) // TODO
 	require.Nil(t, block)
 	require.ErrorContains(t, err, "transaction data size exceeds maximum")
 
@@ -822,7 +826,7 @@ func TestPrepareProposalErrorOnPrepareProposalError(t *testing.T) {
 	commit, err := makeValidCommit(height, types.BlockID{}, state.Validators, privVals)
 	require.NoError(t, err)
 
-	block, err := blockExec.CreateProposalBlock(height, state, commit, pa)
+	block, err := blockExec.CreateProposalBlock(nil, height, state, commit, pa) // TODO
 	require.Nil(t, block)
 	require.ErrorContains(t, err, "an injected error")
 

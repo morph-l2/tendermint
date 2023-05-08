@@ -102,8 +102,12 @@ func newReactor(
 	stateStore = sm.NewStore(db, sm.StoreOptions{
 		DiscardABCIResponses: false,
 	})
-	blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyApp.Consensus(),
-		mp, sm.EmptyEvidencePool{})
+	blockExec := sm.NewBlockExecutor(
+		stateStore,
+		log.TestingLogger(),
+		proxyApp.Consensus(),
+		mp, sm.EmptyEvidencePool{},
+	)
 	if err = stateStore.Save(state); err != nil {
 		panic(err)
 	}
@@ -130,7 +134,7 @@ func newReactor(
 				lastBlockMeta.BlockID, []types.CommitSig{vote.CommitSig()})
 		}
 
-		thisBlock := state.MakeBlock(blockHeight, nil, lastCommit, nil, state.Validators.Proposer.Address)
+		thisBlock := state.MakeBlock(blockHeight, nil, nil, nil, lastCommit, nil, state.Validators.Proposer.Address) // TODO
 
 		thisParts, err := thisBlock.MakePartSet(types.BlockPartSizeBytes)
 		require.NoError(t, err)
@@ -144,7 +148,7 @@ func newReactor(
 		blockStore.SaveBlock(thisBlock, thisParts, lastCommit)
 	}
 
-	bcReactor := NewReactor(state.Copy(), blockExec, blockStore, fastSync)
+	bcReactor := NewReactor(nil, state.Copy(), blockExec, blockStore, fastSync) // TODO
 	bcReactor.SetLogger(logger.With("module", "blockchain"))
 
 	return ReactorPair{bcReactor, proxyApp}

@@ -310,6 +310,7 @@ func TestCreateProposalBlock(t *testing.T) {
 
 	commit := types.NewCommit(height-1, 0, types.BlockID{}, nil)
 	block, err := blockExec.CreateProposalBlock(
+		nil, // TODO
 		height,
 		state, commit,
 		proposerAddr,
@@ -392,6 +393,7 @@ func TestMaxProposalBlockSize(t *testing.T) {
 
 	commit := types.NewCommit(height-1, 0, types.BlockID{}, nil)
 	block, err := blockExec.CreateProposalBlock(
+		nil, // TODO
 		height,
 		state, commit,
 		proposerAddr,
@@ -431,6 +433,7 @@ func TestNodeNewNodeCustomReactors(t *testing.T) {
 
 	n, err := NewNode(
 		config,
+		nil, // TODO
 		privval.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile()),
 		&blsPrivKey,
 		nodeKey,

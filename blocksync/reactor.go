@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/tendermint/tendermint/l2node"
 	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/p2p"
 	bcproto "github.com/tendermint/tendermint/proto/tendermint/blocksync"
@@ -48,6 +49,8 @@ func (e peerError) Error() string {
 type Reactor struct {
 	p2p.BaseReactor
 
+	l2Node l2node.L2Node
+
 	// immutable
 	initialState sm.State
 
@@ -61,12 +64,16 @@ type Reactor struct {
 }
 
 // NewReactor returns new reactor instance.
-func NewReactor(state sm.State, blockExec *sm.BlockExecutor, store *store.BlockStore,
-	blockSync bool) *Reactor {
+func NewReactor(
+	l2Node l2node.L2Node,
+	state sm.State,
+	blockExec *sm.BlockExecutor,
+	store *store.BlockStore,
+	blockSync bool,
+) *Reactor {
 
 	if state.LastBlockHeight != store.Height() {
-		panic(fmt.Sprintf("state (%v) and store (%v) height mismatch", state.LastBlockHeight,
-			store.Height()))
+		panic(fmt.Sprintf("state (%v) and store (%v) height mismatch", state.LastBlockHeight, store.Height()))
 	}
 
 	requestsCh := make(chan BlockRequest, maxTotalRequesters)
@@ -81,6 +88,7 @@ func NewReactor(state sm.State, blockExec *sm.BlockExecutor, store *store.BlockS
 	pool := NewBlockPool(startHeight, requestsCh, errorsCh)
 
 	bcR := &Reactor{
+		l2Node:       l2Node,
 		initialState: state,
 		blockExec:    blockExec,
 		store:        store,
@@ -290,7 +298,6 @@ func (bcR *Reactor) poolRoutine(stateSynced bool) {
 					bcR.Logger.Error("could not convert msg to proto", "err", err)
 					continue
 				}
-
 				queued := peer.TrySend(BlocksyncChannel, msgBytes)
 				if !queued {
 					bcR.Logger.Debug("Send queue is full, drop block request", "peer", peer.ID(), "height", request.Height)
@@ -304,7 +311,6 @@ func (bcR *Reactor) poolRoutine(stateSynced bool) {
 			case <-statusUpdateTicker.C:
 				// ask for status updates
 				go bcR.BroadcastStatusRequest() //nolint: errcheck
-
 			}
 		}
 	}()
@@ -315,8 +321,13 @@ FOR_LOOP:
 		case <-switchToConsensusTicker.C:
 			height, numPending, lenRequesters := bcR.pool.GetStatus()
 			outbound, inbound, _ := bcR.Switch.NumPeers()
-			bcR.Logger.Debug("Consensus ticker", "numPending", numPending, "total", lenRequesters,
-				"outbound", outbound, "inbound", inbound)
+			bcR.Logger.Debug(
+				"Consensus ticker",
+				"numPending", numPending,
+				"total", lenRequesters,
+				"outbound", outbound,
+				"inbound", inbound,
+			)
 			if bcR.pool.IsCaughtUp() {
 				bcR.Logger.Info("Time to switch to consensus reactor!", "height", height)
 				if err := bcR.pool.Stop(); err != nil {
@@ -361,9 +372,11 @@ FOR_LOOP:
 
 			firstParts, err := first.MakePartSet(types.BlockPartSizeBytes)
 			if err != nil {
-				bcR.Logger.Error("failed to make ",
+				bcR.Logger.Error(
+					"failed to make ",
 					"height", first.Height,
-					"err", err.Error())
+					"err", err.Error(),
+				)
 				break FOR_LOOP
 			}
 			firstPartSetHeader := firstParts.Header()
@@ -411,12 +424,45 @@ FOR_LOOP:
 				// TODO This is bad, are we zombie?
 				panic(fmt.Sprintf("Failed to process committed block (%d:%X): %v", first.Height, first.Hash(), err))
 			}
+
+			height, err := bcR.l2Node.DeliverBlock(
+				l2node.ConvertTxsToBytes(first.Data.Txs),
+				first.Data.L2Config,
+				first.Data.ZkConfig,
+				l2node.GetValidators(first),
+				l2node.GetBLSSignatures(first),
+			)
+			if err != nil || first.Height < height {
+				panic(err)
+			}
+
+			for first.Height >= height {
+				requiredBlock := bcR.store.LoadBlock(height)
+				if requiredBlock == nil {
+					panic("nil block")
+				}
+				height, err = bcR.l2Node.DeliverBlock(
+					l2node.ConvertTxsToBytes(requiredBlock.Data.Txs),
+					requiredBlock.Data.L2Config,
+					requiredBlock.Data.ZkConfig,
+					l2node.GetValidators(requiredBlock),
+					l2node.GetBLSSignatures(requiredBlock),
+				)
+				if err != nil {
+					panic(err)
+				}
+			}
+
 			blocksSynced++
 
 			if blocksSynced%100 == 0 {
 				lastRate = 0.9*lastRate + 0.1*(100/time.Since(lastHundred).Seconds())
-				bcR.Logger.Info("Block Sync Rate", "height", bcR.pool.height,
-					"max_peer_height", bcR.pool.MaxPeerHeight(), "blocks/s", lastRate)
+				bcR.Logger.Info(
+					"Block Sync Rate",
+					"height", bcR.pool.height,
+					"max_peer_height", bcR.pool.MaxPeerHeight(),
+					"blocks/s", lastRate,
+				)
 				lastHundred = time.Now()
 			}
 

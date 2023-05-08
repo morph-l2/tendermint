@@ -234,13 +234,15 @@ func FromProto(pb *tmstate.State) (*State, error) { //nolint:golint
 func (state State) MakeBlock(
 	height int64,
 	txs []types.Tx,
+	l2Config []byte,
+	zkConfig []byte,
 	lastCommit *types.Commit,
 	evidence []types.Evidence,
 	proposerAddress []byte,
 ) *types.Block {
 
 	// Build base block with block data.
-	block := types.MakeBlock(height, txs, lastCommit, evidence)
+	block := types.MakeBlock(height, txs, l2Config, zkConfig, lastCommit, evidence)
 
 	// Set time.
 	var timestamp time.Time

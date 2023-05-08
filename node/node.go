@@ -22,6 +22,7 @@ import (
 	cs "github.com/tendermint/tendermint/consensus"
 	"github.com/tendermint/tendermint/crypto"
 	"github.com/tendermint/tendermint/evidence"
+	"github.com/tendermint/tendermint/l2node"
 	tmjson "github.com/tendermint/tendermint/libs/json"
 	"github.com/tendermint/tendermint/libs/log"
 	tmos "github.com/tendermint/tendermint/libs/os"
@@ -113,6 +114,7 @@ func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
 
 	return NewNode(
 		config,
+		nil, // TODO
 		privval.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile()),
 		&blsPrivKey,
 		nodeKey,
@@ -452,7 +454,9 @@ func createEvidenceReactor(config *cfg.Config, dbProvider DBProvider,
 	return evidenceReactor, evidencePool, nil
 }
 
-func createBlockchainReactor(config *cfg.Config,
+func createBlockchainReactor(
+	l2Node l2node.L2Node,
+	config *cfg.Config,
 	state sm.State,
 	blockExec *sm.BlockExecutor,
 	blockStore *store.BlockStore,
@@ -461,7 +465,7 @@ func createBlockchainReactor(config *cfg.Config,
 ) (bcReactor p2p.Reactor, err error) {
 	switch config.BlockSync.Version {
 	case "v0":
-		bcReactor = bc.NewReactor(state.Copy(), blockExec, blockStore, blockSync)
+		bcReactor = bc.NewReactor(l2Node, state.Copy(), blockExec, blockStore, blockSync)
 	case "v1", "v2":
 		return nil, fmt.Errorf("block sync version %s has been deprecated. Please use v0", config.BlockSync.Version)
 	default:
@@ -473,6 +477,7 @@ func createBlockchainReactor(config *cfg.Config,
 }
 
 func createConsensusReactor(
+	l2Node l2node.L2Node,
 	config *cfg.Config,
 	state sm.State,
 	blockExec *sm.BlockExecutor,
@@ -487,6 +492,7 @@ func createConsensusReactor(
 	consensusLogger log.Logger,
 ) (*cs.Reactor, *cs.State) {
 	consensusState := cs.NewState(
+		l2Node,
 		config.Consensus,
 		state.Copy(),
 		blockExec,
@@ -661,9 +667,16 @@ func createPEXReactorAndAddToSwitch(addrBook pex.AddrBook, config *cfg.Config,
 }
 
 // startStateSync starts an asynchronous state sync process, then switches to block sync mode.
-func startStateSync(ssR *statesync.Reactor, bcR blockSyncReactor, conR *cs.Reactor,
-	stateProvider statesync.StateProvider, config *cfg.StateSyncConfig, blockSync bool,
-	stateStore sm.Store, blockStore *store.BlockStore, state sm.State,
+func startStateSync(
+	ssR *statesync.Reactor,
+	bcR blockSyncReactor,
+	conR *cs.Reactor,
+	stateProvider statesync.StateProvider,
+	config *cfg.StateSyncConfig,
+	blockSync bool,
+	stateStore sm.Store,
+	blockStore *store.BlockStore,
+	state sm.State,
 ) error {
 	ssR.Logger.Info("Starting state sync")
 
@@ -720,6 +733,7 @@ func startStateSync(ssR *statesync.Reactor, bcR blockSyncReactor, conR *cs.React
 // NewNode returns a new, ready to go, Tendermint Node.
 func NewNode(
 	config *cfg.Config,
+	l2Node l2node.L2Node,
 	privValidator types.PrivValidator,
 	blsPrivKey *blssignatures.PrivateKey,
 	nodeKey *p2p.NodeKey,
@@ -832,7 +846,7 @@ func NewNode(
 	)
 
 	// Make BlockchainReactor. Don't start block sync if we're doing a state sync first.
-	bcReactor, err := createBlockchainReactor(config, state, blockExec, blockStore, blockSync && !stateSync, logger)
+	bcReactor, err := createBlockchainReactor(l2Node, config, state, blockExec, blockStore, blockSync && !stateSync, logger)
 	if err != nil {
 		return nil, fmt.Errorf("could not create blockchain reactor: %w", err)
 	}
@@ -845,7 +859,7 @@ func NewNode(
 		csMetrics.BlockSyncing.Set(1)
 	}
 	consensusReactor, consensusState := createConsensusReactor(
-		config, state, blockExec, blockStore, mempool,
+		l2Node, config, state, blockExec, blockStore, mempool,
 		evidencePool, privValidator, blsPrivKey, csMetrics,
 		stateSync || blockSync, eventBus, consensusLogger,
 	)
@@ -1012,8 +1026,16 @@ func (n *Node) OnStart() error {
 		if !ok {
 			return fmt.Errorf("this blockchain reactor does not support switching from state sync")
 		}
-		err := startStateSync(n.stateSyncReactor, bcR, n.consensusReactor, n.stateSyncProvider,
-			n.config.StateSync, n.config.BlockSyncMode, n.stateStore, n.blockStore, n.stateSyncGenesis)
+		err := startStateSync(
+			n.stateSyncReactor,
+			bcR, n.consensusReactor,
+			n.stateSyncProvider,
+			n.config.StateSync,
+			n.config.BlockSyncMode,
+			n.stateStore,
+			n.blockStore,
+			n.stateSyncGenesis,
+		)
 		if err != nil {
 			return fmt.Errorf("failed to start state sync: %w", err)
 		}

@@ -35,7 +35,7 @@ require (
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475
 	github.com/rs/cors v1.8.2
 	github.com/sasha-s/go-deadlock v0.3.1
-	github.com/scroll-tech/go-ethereum v1.11.4
+	github.com/scroll-tech/go-ethereum v1.10.14-0.20230419041428-d274ef1f936d
 	github.com/snikch/goodman v0.0.0-20171125024755-10e37e294daa
 	github.com/spf13/cobra v1.5.0
 	github.com/spf13/viper v1.13.0
@@ -99,6 +99,7 @@ require (
 	github.com/docker/go-units v0.4.0 // indirect
 	github.com/dustin/go-humanize v1.0.0 // indirect
 	github.com/esimonov/ifshort v1.0.4 // indirect
+	github.com/ethereum/go-ethereum v1.10.13 // indirect
 	github.com/ettle/strcase v0.1.1 // indirect
 	github.com/fatih/color v1.13.0 // indirect
 	github.com/fatih/structtag v1.2.0 // indirect
@@ -271,8 +272,6 @@ require (
 	mvdan.cc/lint v0.0.0-20170908181259-adc824a0674b // indirect
 	mvdan.cc/unparam v0.0.0-20220706161116-678bad134442 // indirect
 )
-
-replace github.com/scroll-tech/go-ethereum => github.com/bebop-labs/go-ethereum v1.10.14-0.20230420074649-6a142ef6410a
 
 replace github.com/btcsuite/btcd => github.com/btcsuite/btcd v0.20.1-beta
 

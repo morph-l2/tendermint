@@ -131,6 +131,7 @@ func startNode(cfg *Config) error {
 
 	n, err := node.NewNode(
 		tmcfg,
+		nil, // TODO
 		privval.LoadOrGenFilePV(tmcfg.PrivValidatorKeyFile(), tmcfg.PrivValidatorStateFile()),
 		&blsPrivKey,
 		nodeKey,

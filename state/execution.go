@@ -7,6 +7,7 @@ import (
 
 	abci "github.com/tendermint/tendermint/abci/types"
 	cryptoenc "github.com/tendermint/tendermint/crypto/encoding"
+	"github.com/tendermint/tendermint/l2node"
 	"github.com/tendermint/tendermint/libs/fail"
 	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/mempool"
@@ -93,6 +94,7 @@ func (blockExec *BlockExecutor) SetEventBus(eventBus types.BlockEventPublisher) 
 //
 // Contract: application will not return more bytes than are sent over the wire.
 func (blockExec *BlockExecutor) CreateProposalBlock(
+	l2Node l2node.L2Node,
 	height int64,
 	state State,
 	commit *types.Commit,
@@ -100,16 +102,32 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 ) (*types.Block, error) {
 
 	maxBytes := state.ConsensusParams.Block.MaxBytes
-	maxGas := state.ConsensusParams.Block.MaxGas
+	// maxGas := state.ConsensusParams.Block.MaxGas
 
 	evidence, evSize := blockExec.evpool.PendingEvidence(state.ConsensusParams.Evidence.MaxBytes)
 
 	// Fetch a limited amount of valid txs
 	maxDataBytes := types.MaxDataBytes(maxBytes, evSize, state.Validators.Size())
 
-	// TODO get tx from l2 node
-	txs := blockExec.mempool.ReapMaxBytesMaxGas(maxDataBytes, maxGas)
-	block := state.MakeBlock(height, txs, commit, evidence, proposerAddr)
+	// TODO
+	var (
+		txs      [][]byte
+		l2Config []byte
+		zkConfig []byte
+		err      error
+	)
+	for {
+		txs, l2Config, zkConfig, err = l2Node.RequestBlockData(height)
+		if err != nil {
+			return nil, err
+		}
+		if len(txs) > 0 {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+	block := state.MakeBlock(height, l2node.ConvertBytesToTxs(txs), l2Config, zkConfig, commit, evidence, proposerAddr)
 
 	localLastCommit := buildLastCommitInfo(block, blockExec.store, state.InitialHeight)
 	rpp, err := blockExec.proxyApp.PrepareProposalSync(
@@ -141,7 +159,7 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 		return nil, err
 	}
 
-	return state.MakeBlock(height, txl, commit, evidence, proposerAddr), nil
+	return state.MakeBlock(height, txl, l2Config, zkConfig, commit, evidence, proposerAddr), nil
 }
 
 func (blockExec *BlockExecutor) ProcessProposal(

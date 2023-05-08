@@ -176,6 +176,7 @@ func NewTendermint(app abci.Application, opts *Options) *nm.Node {
 	}
 	node, err := nm.NewNode(
 		config,
+		nil,
 		pv,
 		&blsPrivKey,
 		nodeKey,

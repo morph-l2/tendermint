@@ -16,6 +16,7 @@ import (
 	cfg "github.com/tendermint/tendermint/config"
 	cstypes "github.com/tendermint/tendermint/consensus/types"
 	"github.com/tendermint/tendermint/crypto"
+	"github.com/tendermint/tendermint/l2node"
 	tmevents "github.com/tendermint/tendermint/libs/events"
 	"github.com/tendermint/tendermint/libs/fail"
 	tmjson "github.com/tendermint/tendermint/libs/json"
@@ -78,6 +79,8 @@ type evidencePool interface {
 // The internal state machine receives input from peers, the internal validator, and from a timer.
 type State struct {
 	service.BaseService
+
+	l2Node l2node.L2Node
 
 	// config details
 	config        *cfg.ConsensusConfig
@@ -149,6 +152,7 @@ type StateOption func(*State)
 
 // NewState returns a new State.
 func NewState(
+	l2Node l2node.L2Node,
 	config *cfg.ConsensusConfig,
 	state sm.State,
 	blockExec *sm.BlockExecutor,
@@ -158,6 +162,7 @@ func NewState(
 	options ...StateOption,
 ) *State {
 	cs := &State{
+		l2Node:           l2Node,
 		config:           config,
 		blockExec:        blockExec,
 		blockStore:       blockStore,
@@ -1039,10 +1044,11 @@ func (cs *State) enterNewRound(height int64, round int32) {
 	// Wait for txs to be available in the mempool
 	// before we enterPropose in round 0. If the last block changed the app hash,
 	// we may need an empty "proof" block, and enterPropose immediately.
-	waitForTxs := cs.config.WaitForTxs() && round == 0 && height != cs.state.InitialHeight
+	waitForTxs := cs.config.WaitForTxs() && round == 0 && !cs.needProofBlock(height)
 	if waitForTxs {
 		if cs.config.CreateEmptyBlocksInterval > 0 {
-			cs.scheduleTimeout(cs.config.CreateEmptyBlocksInterval, height, round, cstypes.RoundStepNewRound)
+			cs.scheduleTimeout(cs.config.CreateEmptyBlocksInterval, height, round,
+				cstypes.RoundStepNewRound)
 		}
 	} else {
 		cs.enterPropose(height, round)
@@ -1237,7 +1243,7 @@ func (cs *State) createProposalBlock() (*types.Block, error) {
 
 	proposerAddr := cs.privValidatorPubKey.Address()
 
-	ret, err := cs.blockExec.CreateProposalBlock(cs.Height, cs.state, commit, proposerAddr)
+	ret, err := cs.blockExec.CreateProposalBlock(cs.l2Node, cs.Height, cs.state, commit, proposerAddr)
 	if err != nil {
 		panic(err)
 	}
@@ -1316,6 +1322,17 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 		))
 	}
 	cs.metrics.MarkProposalProcessed(isAppValid)
+
+	// request l2node to check whether the block data is valid
+	valid, err := cs.l2Node.CheckBlockData(l2node.ConvertTxsToBytes(cs.ProposalBlock.Data.Txs), cs.ProposalBlock.Data.L2Config, cs.ProposalBlock.Data.ZkConfig)
+	if err != nil {
+		logger.Error("check block data failed", err)
+		return
+	}
+	if !valid {
+		logger.Error("block data is invalid")
+		return
+	}
 
 	// Vote nil if the Application rejected the block
 	if !isAppValid {
@@ -1655,11 +1672,12 @@ func (cs *State) finalizeCommit(height int64) {
 	fail.Fail() // XXX
 
 	// Save to blockStore.
+	var seenCommit *types.Commit
 	if cs.blockStore.Height() < block.Height {
 		// NOTE: the seenCommit is local justification to commit this block,
 		// but may differ from the LastCommit included in the next block
 		precommits := cs.Votes.Precommits(cs.CommitRound)
-		seenCommit := precommits.MakeCommit()
+		seenCommit = precommits.MakeCommit()
 		cs.blockStore.SaveBlock(block, blockParts, seenCommit)
 	} else {
 		// Happens during replay if we already saved the block but didn't commit
@@ -1713,6 +1731,14 @@ func (cs *State) finalizeCommit(height int64) {
 		logger.Error("failed to apply block", "err", err)
 		return
 	}
+
+	cs.l2Node.DeliverBlock(
+		l2node.ConvertTxsToBytes(block.Data.Txs),
+		block.Data.L2Config,
+		block.Data.ZkConfig,
+		l2node.GetValidators(block),
+		l2node.GetBLSSignatures(block),
+	)
 
 	fail.Fail() // XXX
 
