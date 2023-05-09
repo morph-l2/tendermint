@@ -1743,14 +1743,26 @@ func (cs *State) finalizeCommit(height int64) {
 		logger.Error("error3: nil config")
 		return
 	}
+	if len(l2node.GetValidators(seenCommit)) == 0 || len(l2node.GetBLSSignatures(seenCommit)) == 0 {
+		logger.Error("error3: nil sig or val")
+		return
+	}
 
-	cs.l2Node.DeliverBlock(
+	h, err := cs.l2Node.DeliverBlock(
 		l2node.ConvertTxsToBytes(block.Data.Txs),
 		block.Data.L2Config,
 		block.Data.ZkConfig,
-		l2node.GetValidators(block),
-		l2node.GetBLSSignatures(block),
+		l2node.GetValidators(seenCommit),
+		l2node.GetBLSSignatures(seenCommit),
 	)
+	if err != nil {
+		logger.Error(err.Error())
+		return
+	}
+	if h != block.Height {
+		logger.Error("error height")
+		return
+	}
 
 	fail.Fail() // XXX
 

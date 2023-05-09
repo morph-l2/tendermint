@@ -53,17 +53,17 @@ func ConvertTxsToBytes(txs []types.Tx) [][]byte {
 	return s
 }
 
-func GetValidators(block *types.Block) []types.Address {
+func GetValidators(commit *types.Commit) []types.Address {
 	var validators []types.Address
-	for _, signature := range block.LastCommit.Signatures {
+	for _, signature := range commit.Signatures {
 		validators = append(validators, signature.BLSSignature)
 	}
 	return validators
 }
 
-func GetBLSSignatures(block *types.Block) [][]byte {
+func GetBLSSignatures(commit *types.Commit) [][]byte {
 	var blsSignatures [][]byte
-	for _, signature := range block.LastCommit.Signatures {
+	for _, signature := range commit.Signatures {
 		blsSignatures = append(blsSignatures, signature.BLSSignature)
 	}
 	return blsSignatures

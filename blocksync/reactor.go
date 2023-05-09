@@ -425,42 +425,48 @@ FOR_LOOP:
 				panic(fmt.Sprintf("Failed to process committed block (%d:%X): %v", first.Height, first.Hash(), err))
 			}
 
-			// TODO: only for test
-			if len(first.Data.L2Config) == 0 || len(first.Data.ZkConfig) == 0 {
-				panic("error1: nil config")
-			}
+			// // TODO: only for test
+			// if len(first.Data.L2Config) == 0 || len(first.Data.ZkConfig) == 0 {
+			// 	panic("error1: nil config")
+			// }
+			// if len(l2node.GetValidators(first)) == 0 || len(l2node.GetBLSSignatures(first)) == 0 {
+			// 	panic("error1: nil sig or val")
+			// }
 
-			height, err := bcR.l2Node.DeliverBlock(
-				l2node.ConvertTxsToBytes(first.Data.Txs),
-				first.Data.L2Config,
-				first.Data.ZkConfig,
-				l2node.GetValidators(first),
-				l2node.GetBLSSignatures(first),
-			)
-			if err != nil || first.Height < height {
-				panic(err)
-			}
+			// height, err := bcR.l2Node.DeliverBlock(
+			// 	l2node.ConvertTxsToBytes(first.Data.Txs),
+			// 	first.Data.L2Config,
+			// 	first.Data.ZkConfig,
+			// 	l2node.GetValidators(first),
+			// 	l2node.GetBLSSignatures(first),
+			// )
+			// if err != nil || first.Height < height {
+			// 	panic(err)
+			// }
 
-			for first.Height >= height {
-				requiredBlock := bcR.store.LoadBlock(height)
-				if requiredBlock == nil {
-					panic("nil block")
-				}
-				// TODO: only for test
-				if len(requiredBlock.Data.L2Config) == 0 || len(requiredBlock.Data.ZkConfig) == 0 {
-					panic("error2: nil config")
-				}
-				height, err = bcR.l2Node.DeliverBlock(
-					l2node.ConvertTxsToBytes(requiredBlock.Data.Txs),
-					requiredBlock.Data.L2Config,
-					requiredBlock.Data.ZkConfig,
-					l2node.GetValidators(requiredBlock),
-					l2node.GetBLSSignatures(requiredBlock),
-				)
-				if err != nil {
-					panic(err)
-				}
-			}
+			// for first.Height >= height {
+			// 	requiredBlock := bcR.store.LoadBlock(height)
+			// 	if requiredBlock == nil {
+			// 		panic("nil block")
+			// 	}
+			// 	// TODO: only for test
+			// 	if len(requiredBlock.Data.L2Config) == 0 || len(requiredBlock.Data.ZkConfig) == 0 {
+			// 		panic("error2: nil config")
+			// 	}
+			// 	if len(l2node.GetValidators(requiredBlock)) == 0 || len(l2node.GetBLSSignatures(requiredBlock)) == 0 {
+			// 		panic("error2: nil sig or val")
+			// 	}
+			// 	height, err = bcR.l2Node.DeliverBlock(
+			// 		l2node.ConvertTxsToBytes(requiredBlock.Data.Txs),
+			// 		requiredBlock.Data.L2Config,
+			// 		requiredBlock.Data.ZkConfig,
+			// 		l2node.GetValidators(requiredBlock),
+			// 		l2node.GetBLSSignatures(requiredBlock),
+			// 	)
+			// 	if err != nil {
+			// 		panic(err)
+			// 	}
+			// }
 
 			blocksSynced++
 
