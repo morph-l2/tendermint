@@ -1082,6 +1082,8 @@ func (data *Data) ToProto() tmproto.Data {
 		}
 		tp.Txs = txBzs
 	}
+	tp.L2Config = data.L2Config
+	tp.ZkConfig = data.ZkConfig
 
 	return *tp
 }
@@ -1103,6 +1105,9 @@ func DataFromProto(dp *tmproto.Data) (Data, error) {
 	} else {
 		data.Txs = Txs{}
 	}
+
+	data.L2Config = dp.L2Config
+	data.ZkConfig = dp.ZkConfig
 
 	return *data, nil
 }

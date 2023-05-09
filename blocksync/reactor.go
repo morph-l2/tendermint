@@ -425,6 +425,11 @@ FOR_LOOP:
 				panic(fmt.Sprintf("Failed to process committed block (%d:%X): %v", first.Height, first.Hash(), err))
 			}
 
+			// TODO: only for test
+			if len(first.Data.L2Config) == 0 || len(first.Data.ZkConfig) == 0 {
+				panic("error1: nil config")
+			}
+
 			height, err := bcR.l2Node.DeliverBlock(
 				l2node.ConvertTxsToBytes(first.Data.Txs),
 				first.Data.L2Config,
@@ -440,6 +445,10 @@ FOR_LOOP:
 				requiredBlock := bcR.store.LoadBlock(height)
 				if requiredBlock == nil {
 					panic("nil block")
+				}
+				// TODO: only for test
+				if len(requiredBlock.Data.L2Config) == 0 || len(requiredBlock.Data.ZkConfig) == 0 {
+					panic("error2: nil config")
 				}
 				height, err = bcR.l2Node.DeliverBlock(
 					l2node.ConvertTxsToBytes(requiredBlock.Data.Txs),

@@ -109,7 +109,6 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 	// Fetch a limited amount of valid txs
 	maxDataBytes := types.MaxDataBytes(maxBytes, evSize, state.Validators.Size())
 
-	// TODO
 	var (
 		txs      [][]byte
 		l2Config []byte

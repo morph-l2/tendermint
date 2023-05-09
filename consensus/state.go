@@ -1323,6 +1323,12 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 	}
 	cs.metrics.MarkProposalProcessed(isAppValid)
 
+	// TODO: only for test
+	if len(cs.ProposalBlock.Data.L2Config) == 0 || len(cs.ProposalBlock.Data.ZkConfig) == 0 {
+		logger.Error("nil config")
+		return
+	}
+
 	// request l2node to check whether the block data is valid
 	valid, err := cs.l2Node.CheckBlockData(l2node.ConvertTxsToBytes(cs.ProposalBlock.Data.Txs), cs.ProposalBlock.Data.L2Config, cs.ProposalBlock.Data.ZkConfig)
 	if err != nil {
@@ -1729,6 +1735,12 @@ func (cs *State) finalizeCommit(height int64) {
 	)
 	if err != nil {
 		logger.Error("failed to apply block", "err", err)
+		return
+	}
+
+	// TODO: only for test
+	if len(block.Data.L2Config) == 0 || len(block.Data.ZkConfig) == 0 {
+		logger.Error("error3: nil config")
 		return
 	}
 
