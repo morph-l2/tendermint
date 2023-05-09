@@ -265,7 +265,7 @@ func DefaultBaseConfig() BaseConfig {
 		ABCI:               "socket",
 		LogLevel:           DefaultLogLevel,
 		LogFormat:          LogFormatPlain,
-		BlockSyncMode:      true,
+		BlockSyncMode:      false,
 		FilterPeers:        false,
 		DBBackend:          "goleveldb",
 		DBPath:             "data",
