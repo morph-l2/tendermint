@@ -32,7 +32,6 @@ type L2Node interface {
 		validators []types.Address,
 		blsSignatures [][]byte,
 	) (
-		currentHeight int64,
 		err error,
 	)
 }
@@ -72,19 +71,11 @@ func GetBLSSignatures(commit *types.Commit) [][]byte {
 var _ L2Node = &MockL2Node{}
 
 type MockL2Node struct {
-	txNumber      int
-	currentHeight int64
+	txNumber int
 }
 
-func NewMockL2Node(n int, h int64) L2Node {
-	return &MockL2Node{
-		txNumber:      n,
-		currentHeight: h,
-	}
-}
-
-func (l *MockL2Node) SetCurrentHeight(h int64) {
-	l.currentHeight = h
+func NewMockL2Node(n int) L2Node {
+	return &MockL2Node{txNumber: n}
 }
 
 func (l *MockL2Node) SetTxNumber(n int) {
@@ -99,7 +90,6 @@ func (l *MockL2Node) RequestBlockData(
 	zkConfig []byte,
 	err error,
 ) {
-	l.currentHeight = height
 	var rTxs [][]byte
 	for i := int(0); i < l.txNumber; i++ {
 		rTxs = append(rTxs, randBytes(10))
@@ -127,10 +117,9 @@ func (l MockL2Node) DeliverBlock(
 	validators []types.Address,
 	blsSignatures [][]byte,
 ) (
-	currentHeight int64,
 	err error,
 ) {
-	return l.currentHeight, nil
+	return nil
 }
 
 func randBytes(n int) []byte {

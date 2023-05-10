@@ -1718,6 +1718,27 @@ func (cs *State) finalizeCommit(height int64) {
 	// Create a copy of the state for staging and an event cache for txs.
 	stateCopy := cs.state.Copy()
 
+	// TODO: only for test
+	if len(block.Data.L2Config) == 0 || len(block.Data.ZkConfig) == 0 {
+		logger.Error("error3: nil config")
+		return
+	}
+	if len(l2node.GetValidators(seenCommit)) == 0 || len(l2node.GetBLSSignatures(seenCommit)) == 0 {
+		logger.Error("error3: nil sig or val")
+		return
+	}
+
+	if err := cs.l2Node.DeliverBlock(
+		l2node.ConvertTxsToBytes(block.Data.Txs),
+		block.Data.L2Config,
+		block.Data.ZkConfig,
+		l2node.GetValidators(seenCommit),
+		l2node.GetBLSSignatures(seenCommit),
+	); err != nil {
+		logger.Error(err.Error())
+		return
+	}
+
 	// Execute and commit the block, update and save the state, and update the mempool.
 	// NOTE The block.AppHash wont reflect these txs until the next block.
 	var (
@@ -1735,32 +1756,6 @@ func (cs *State) finalizeCommit(height int64) {
 	)
 	if err != nil {
 		logger.Error("failed to apply block", "err", err)
-		return
-	}
-
-	// TODO: only for test
-	if len(block.Data.L2Config) == 0 || len(block.Data.ZkConfig) == 0 {
-		logger.Error("error3: nil config")
-		return
-	}
-	if len(l2node.GetValidators(seenCommit)) == 0 || len(l2node.GetBLSSignatures(seenCommit)) == 0 {
-		logger.Error("error3: nil sig or val")
-		return
-	}
-
-	h, err := cs.l2Node.DeliverBlock(
-		l2node.ConvertTxsToBytes(block.Data.Txs),
-		block.Data.L2Config,
-		block.Data.ZkConfig,
-		l2node.GetValidators(seenCommit),
-		l2node.GetBLSSignatures(seenCommit),
-	)
-	if err != nil {
-		logger.Error(err.Error())
-		return
-	}
-	if h != block.Height {
-		logger.Error("error height")
 		return
 	}
 
