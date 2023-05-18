@@ -15,6 +15,7 @@ import (
 
 	abci "github.com/tendermint/tendermint/abci/types"
 	cfg "github.com/tendermint/tendermint/config"
+	"github.com/tendermint/tendermint/l2node"
 	"github.com/tendermint/tendermint/libs/log"
 	mpmocks "github.com/tendermint/tendermint/mempool/mocks"
 	"github.com/tendermint/tendermint/p2p"
@@ -57,7 +58,8 @@ func newReactor(
 	logger log.Logger,
 	genDoc *types.GenesisDoc,
 	privVals []types.PrivValidator,
-	maxBlockHeight int64) ReactorPair {
+	maxBlockHeight int64,
+) ReactorPair {
 	if len(privVals) != 1 {
 		panic("only support one validator")
 	}
@@ -130,11 +132,15 @@ func newReactor(
 			if err != nil {
 				panic(err)
 			}
-			lastCommit = types.NewCommit(vote.Height, vote.Round,
-				lastBlockMeta.BlockID, []types.CommitSig{vote.CommitSig()})
+			lastCommit = types.NewCommit(
+				vote.Height,
+				vote.Round,
+				lastBlockMeta.BlockID,
+				[]types.CommitSig{vote.CommitSig()},
+			)
 		}
 
-		thisBlock := state.MakeBlock(blockHeight, nil, nil, nil, lastCommit, nil, state.Validators.Proposer.Address) // TODO
+		thisBlock := state.MakeBlock(blockHeight, nil, []byte("l2"), []byte("zk"), lastCommit, nil, state.Validators.Proposer.Address)
 
 		thisParts, err := thisBlock.MakePartSet(types.BlockPartSizeBytes)
 		require.NoError(t, err)
@@ -148,7 +154,7 @@ func newReactor(
 		blockStore.SaveBlock(thisBlock, thisParts, lastCommit)
 	}
 
-	bcReactor := NewReactor(nil, state.Copy(), blockExec, blockStore, fastSync) // TODO
+	bcReactor := NewReactor(l2node.NewMockL2Node(0), state.Copy(), blockExec, blockStore, fastSync) // TODO
 	bcReactor.SetLogger(logger.With("module", "blockchain"))
 
 	return ReactorPair{bcReactor, proxyApp}

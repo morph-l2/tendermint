@@ -8,6 +8,7 @@ import (
 
 	"github.com/scroll-tech/go-ethereum/core/types"
 	"github.com/scroll-tech/go-ethereum/rlp"
+
 	"github.com/tendermint/tendermint/ethutil/hex"
 )
 
