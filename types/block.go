@@ -739,6 +739,7 @@ func (cs *CommitSig) FromProto(csp tmproto.CommitSig) error {
 	cs.ValidatorAddress = csp.ValidatorAddress
 	cs.Timestamp = csp.Timestamp
 	cs.Signature = csp.Signature
+	cs.BLSSignature = csp.BLSSignature
 
 	return cs.ValidateBasic()
 }
