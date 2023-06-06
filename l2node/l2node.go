@@ -58,8 +58,7 @@ func GetValidators(commit *types.Commit) []types.Address {
 	fmt.Println("===========================")
 	for _, signature := range commit.Signatures {
 		fmt.Println(len(signature.ValidatorAddress))
-		// TODO return err
-		// if len(signature.ValidatorAddress) == 0 {}
+		// TODO return err if len(signature.ValidatorAddress) == 0 {}
 		validators = append(validators, signature.ValidatorAddress)
 	}
 	return validators
@@ -70,8 +69,7 @@ func GetBLSSignatures(commit *types.Commit) [][]byte {
 	fmt.Println("===========================")
 	for _, signature := range commit.Signatures {
 		fmt.Println(len(signature.BLSSignature))
-		// TODO return err
-		// if len(signature.BLSSignature) == 0 {}
+		// TODO return err if len(signature.BLSSignature) == 0
 		blsSignatures = append(blsSignatures, signature.BLSSignature)
 	}
 	return blsSignatures
@@ -84,7 +82,9 @@ type MockL2Node struct {
 }
 
 func NewMockL2Node(n int) L2Node {
-	return &MockL2Node{txNumber: n}
+	return &MockL2Node{
+		txNumber:     n,
+	}
 }
 
 func (l *MockL2Node) SetTxNumber(n int) {

@@ -10,7 +10,6 @@ import (
 	"github.com/tendermint/tendermint/l2node"
 	"github.com/tendermint/tendermint/libs/fail"
 	"github.com/tendermint/tendermint/libs/log"
-	"github.com/tendermint/tendermint/mempool"
 	tmstate "github.com/tendermint/tendermint/proto/tendermint/state"
 	"github.com/tendermint/tendermint/proxy"
 	"github.com/tendermint/tendermint/types"
@@ -32,10 +31,9 @@ type BlockExecutor struct {
 	// events
 	eventBus types.BlockEventPublisher
 
-	// manage the mempool lock during commit
-	// and update both with block results after commit.
-	mempool mempool.Mempool
-	evpool  EvidencePool
+	notifier *l2node.Notifier
+
+	evpool EvidencePool
 
 	logger log.Logger
 
@@ -56,7 +54,7 @@ func NewBlockExecutor(
 	stateStore Store,
 	logger log.Logger,
 	proxyApp proxy.AppConnConsensus,
-	mempool mempool.Mempool,
+	notifier *l2node.Notifier,
 	evpool EvidencePool,
 	options ...BlockExecutorOption,
 ) *BlockExecutor {
@@ -64,7 +62,7 @@ func NewBlockExecutor(
 		store:    stateStore,
 		proxyApp: proxyApp,
 		eventBus: types.NopEventBus{},
-		mempool:  mempool,
+		notifier: notifier,
 		evpool:   evpool,
 		logger:   logger,
 		metrics:  NopMetrics(),
@@ -75,6 +73,10 @@ func NewBlockExecutor(
 	}
 
 	return res
+}
+
+func (blockExec *BlockExecutor) RequestBlockData(height int64, createEmptyBlocksInterval time.Duration) {
+	blockExec.notifier.RequestBlockData(height, createEmptyBlocksInterval)
 }
 
 func (blockExec *BlockExecutor) Store() Store {
@@ -109,21 +111,14 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 	// Fetch a limited amount of valid txs
 	maxDataBytes := types.MaxDataBytes(maxBytes, evSize, state.Validators.Size())
 
-	var (
-		txs      [][]byte
-		l2Config []byte
-		zkConfig []byte
-		err      error
-	)
-	for {
-		txs, l2Config, zkConfig, err = l2Node.RequestBlockData(height)
-		if err != nil {
-			return nil, err
-		}
-		if len(txs) > 0 {
-			break
-		}
-		time.Sleep(1 * time.Second)
+	// txs := blockExec.mempool.ReapMaxBytesMaxGas(maxDataBytes, maxGas)
+
+	fmt.Println("============================================================")
+	fmt.Println("RequestBlockData")
+	fmt.Println("============================================================")
+	txs, l2Config, zkConfig, err := l2Node.RequestBlockData(height)
+	if err != nil {
+		return nil, err
 	}
 
 	block := state.MakeBlock(height, l2node.ConvertBytesToTxs(txs), l2Config, zkConfig, commit, evidence, proposerAddr)
@@ -232,8 +227,7 @@ func (blockExec *BlockExecutor) ApplyBlock(
 
 	// validate the validator updates and convert to tendermint types
 	abciValUpdates := abciResponses.EndBlock.ValidatorUpdates
-	err = validateValidatorUpdates(abciValUpdates, state.ConsensusParams.Validator)
-	if err != nil {
+	if err = validateValidatorUpdates(abciValUpdates, state.ConsensusParams.Validator); err != nil {
 		return state, 0, fmt.Errorf("error in validator updates: %v", err)
 	}
 
@@ -292,16 +286,6 @@ func (blockExec *BlockExecutor) Commit(
 	block *types.Block,
 	deliverTxResponses []*abci.ResponseDeliverTx,
 ) ([]byte, int64, error) {
-	blockExec.mempool.Lock()
-	defer blockExec.mempool.Unlock()
-
-	// while mempool is Locked, flush to ensure all async requests have completed
-	// in the ABCI app before Commit.
-	err := blockExec.mempool.FlushAppConn()
-	if err != nil {
-		blockExec.logger.Error("client error during mempool.FlushAppConn", "err", err)
-		return nil, 0, err
-	}
 
 	// Commit block, get hash back
 	res, err := blockExec.proxyApp.CommitSync()
@@ -316,15 +300,6 @@ func (blockExec *BlockExecutor) Commit(
 		"height", block.Height,
 		"num_txs", len(block.Txs),
 		"app_hash", fmt.Sprintf("%X", res.Data),
-	)
-
-	// Update mempool.
-	err = blockExec.mempool.Update(
-		block.Height,
-		block.Txs,
-		deliverTxResponses,
-		TxPreCheck(state),
-		TxPostCheck(state),
 	)
 
 	return res.Data, res.RetainHeight, err

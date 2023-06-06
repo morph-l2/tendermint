@@ -1044,11 +1044,12 @@ func (cs *State) enterNewRound(height int64, round int32) {
 	// Wait for txs to be available in the mempool
 	// before we enterPropose in round 0. If the last block changed the app hash,
 	// we may need an empty "proof" block, and enterPropose immediately.
-	waitForTxs := cs.config.WaitForTxs() && round == 0 && !cs.needProofBlock(height)
+	waitForTxs := cs.config.WaitForTxs() && round == 0 && height != cs.state.InitialHeight
+	// waitForTxs := cs.config.WaitForTxs() && round == 0 && !cs.needProofBlock(height)
 	if waitForTxs {
+		cs.blockExec.RequestBlockData(height, cs.config.CreateEmptyBlocksInterval)
 		if cs.config.CreateEmptyBlocksInterval > 0 {
-			cs.scheduleTimeout(cs.config.CreateEmptyBlocksInterval, height, round,
-				cstypes.RoundStepNewRound)
+			cs.scheduleTimeout(cs.config.CreateEmptyBlocksInterval, height, round, cstypes.RoundStepNewRound)
 		}
 	} else {
 		cs.enterPropose(height, round)
@@ -1330,6 +1331,9 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 	}
 
 	// request l2node to check whether the block data is valid
+	fmt.Println("============================================================")
+	fmt.Println("CheckBlockData")
+	fmt.Println("============================================================")
 	valid, err := cs.l2Node.CheckBlockData(l2node.ConvertTxsToBytes(cs.ProposalBlock.Data.Txs), cs.ProposalBlock.Data.L2Config, cs.ProposalBlock.Data.ZkConfig)
 	if err != nil {
 		logger.Error("check block data failed", err)
@@ -1731,6 +1735,9 @@ func (cs *State) finalizeCommit(height int64) {
 		return
 	}
 
+	fmt.Println("============================================================")
+	fmt.Println("DeliverBlock")
+	fmt.Println("============================================================")
 	if err := cs.l2Node.DeliverBlock(
 		l2node.ConvertTxsToBytes(block.Data.Txs),
 		block.Data.L2Config,

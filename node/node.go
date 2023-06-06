@@ -114,7 +114,7 @@ func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
 
 	return NewNode(
 		config,
-		l2node.NewMockL2Node(2),
+		l2node.NewMockL2Node(0),
 		privval.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile()),
 		&blsPrivKey,
 		nodeKey,
@@ -482,7 +482,7 @@ func createConsensusReactor(
 	state sm.State,
 	blockExec *sm.BlockExecutor,
 	blockStore sm.BlockStore,
-	mempool mempl.Mempool,
+	notifier *l2node.Notifier,
 	evidencePool *evidence.Pool,
 	privValidator types.PrivValidator,
 	blsPrivKey *blssignatures.PrivateKey,
@@ -497,7 +497,7 @@ func createConsensusReactor(
 		state.Copy(),
 		blockExec,
 		blockStore,
-		mempool,
+		notifier,
 		evidencePool,
 		cs.StateMetrics(csMetrics),
 	)
@@ -829,6 +829,8 @@ func NewNode(
 	// Make MempoolReactor
 	mempool, mempoolReactor := createMempoolAndMempoolReactor(config, proxyApp, state, memplMetrics, logger)
 
+	notifier := l2node.NewNotifier(l2Node)
+
 	// Make Evidence Reactor
 	evidenceReactor, evidencePool, err := createEvidenceReactor(config, dbProvider, stateDB, blockStore, logger)
 	if err != nil {
@@ -840,7 +842,7 @@ func NewNode(
 		stateStore,
 		logger.With("module", "state"),
 		proxyApp.Consensus(),
-		mempool,
+		notifier,
 		evidencePool,
 		sm.BlockExecutorWithMetrics(smMetrics),
 	)
@@ -859,7 +861,7 @@ func NewNode(
 		csMetrics.BlockSyncing.Set(1)
 	}
 	consensusReactor, consensusState := createConsensusReactor(
-		l2Node, config, state, blockExec, blockStore, mempool,
+		l2Node, config, state, blockExec, blockStore, notifier,
 		evidencePool, privValidator, blsPrivKey, csMetrics,
 		stateSync || blockSync, eventBus, consensusLogger,
 	)
