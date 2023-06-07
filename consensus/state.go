@@ -1244,7 +1244,7 @@ func (cs *State) createProposalBlock() (*types.Block, error) {
 
 	proposerAddr := cs.privValidatorPubKey.Address()
 
-	ret, err := cs.blockExec.CreateProposalBlock(cs.l2Node, cs.Height, cs.state, commit, proposerAddr)
+	ret, err := cs.blockExec.CreateProposalBlock(cs.l2Node, cs.config, cs.Height, cs.state, commit, proposerAddr)
 	if err != nil {
 		panic(err)
 	}

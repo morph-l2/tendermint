@@ -78,3 +78,11 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 		}()
 	}
 }
+
+func (n *Notifier) GetBlockData() *BlockData {
+	return n.blockData
+}
+
+func (n *Notifier) CleanBlockData() {
+	n.blockData = nil
+}

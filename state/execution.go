@@ -6,6 +6,7 @@ import (
 	"time"
 
 	abci "github.com/tendermint/tendermint/abci/types"
+	cfg "github.com/tendermint/tendermint/config"
 	cryptoenc "github.com/tendermint/tendermint/crypto/encoding"
 	"github.com/tendermint/tendermint/l2node"
 	"github.com/tendermint/tendermint/libs/fail"
@@ -79,6 +80,10 @@ func (blockExec *BlockExecutor) RequestBlockData(height int64, createEmptyBlocks
 	blockExec.notifier.RequestBlockData(height, createEmptyBlocksInterval)
 }
 
+func (blockExec *BlockExecutor) GetBlockData() *l2node.BlockData {
+	return blockExec.notifier.GetBlockData()
+}
+
 func (blockExec *BlockExecutor) Store() Store {
 	return blockExec.store
 }
@@ -97,6 +102,7 @@ func (blockExec *BlockExecutor) SetEventBus(eventBus types.BlockEventPublisher) 
 // Contract: application will not return more bytes than are sent over the wire.
 func (blockExec *BlockExecutor) CreateProposalBlock(
 	l2Node l2node.L2Node,
+	config *cfg.ConsensusConfig,
 	height int64,
 	state State,
 	commit *types.Commit,
@@ -116,9 +122,22 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 	fmt.Println("============================================================")
 	fmt.Println("RequestBlockData")
 	fmt.Println("============================================================")
-	txs, l2Config, zkConfig, err := l2Node.RequestBlockData(height)
-	if err != nil {
-		return nil, err
+
+	var txs [][]byte
+	var l2Config []byte
+	var zkConfig []byte
+	var err error
+	if config.WaitForTxs() {
+		blockData := blockExec.notifier.GetBlockData()
+		if blockData != nil {
+			txs, l2Config, zkConfig = blockData.Txs, blockData.L2Config, blockData.ZKConfig
+			blockExec.notifier.CleanBlockData()
+		}
+	} else {
+		txs, l2Config, zkConfig, err = l2Node.RequestBlockData(height)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	block := state.MakeBlock(height, l2node.ConvertBytesToTxs(txs), l2Config, zkConfig, commit, evidence, proposerAddr)
