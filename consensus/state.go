@@ -1047,7 +1047,9 @@ func (cs *State) enterNewRound(height int64, round int32) {
 	waitForTxs := cs.config.WaitForTxs() && round == 0 && height != cs.state.InitialHeight
 	// waitForTxs := cs.config.WaitForTxs() && round == 0 && !cs.needProofBlock(height)
 	if waitForTxs {
-		cs.blockExec.RequestBlockData(height, cs.config.CreateEmptyBlocksInterval)
+		if cs.isProposer(cs.privValidatorPubKey.Address()) {
+			cs.blockExec.RequestBlockData(height, cs.config.CreateEmptyBlocksInterval)
+		}
 		if cs.config.CreateEmptyBlocksInterval > 0 {
 			cs.scheduleTimeout(cs.config.CreateEmptyBlocksInterval, height, round, cstypes.RoundStepNewRound)
 		}
@@ -1326,7 +1328,7 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 
 	// TODO: only for test
 	if len(cs.ProposalBlock.Data.L2Config) == 0 || len(cs.ProposalBlock.Data.ZkConfig) == 0 {
-		logger.Error("nil config")
+		panic("nil config")
 	}
 
 	// request l2node to check whether the block data is valid
@@ -1720,7 +1722,7 @@ func (cs *State) finalizeCommit(height int64) {
 
 	// TODO: only for test
 	if len(block.Data.L2Config) == 0 || len(block.Data.ZkConfig) == 0 {
-		logger.Error("error3: nil config")
+		panic("error3: nil config")
 	}
 
 	validators := l2node.GetValidators(seenCommit)

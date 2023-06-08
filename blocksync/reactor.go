@@ -418,7 +418,7 @@ FOR_LOOP:
 
 			// TODO: only for test
 			if len(first.Data.L2Config) == 0 || len(first.Data.ZkConfig) == 0 {
-				bcR.Logger.Error("error1: nil config")
+				panic("error1: nil config")
 			}
 			if len(l2node.GetValidators(second.LastCommit)) == 0 || len(l2node.GetBLSSignatures(second.LastCommit)) == 0 {
 				panic("error1: nil sig or val")

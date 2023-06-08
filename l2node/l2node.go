@@ -107,12 +107,8 @@ func (l *MockL2Node) RequestBlockData(
 	for i := int(0); i < l.txNumber; i++ {
 		rTxs = append(rTxs, randBytes(10))
 	}
-	var lc []byte
-	var zc []byte
-	if l.txNumber > 0 {
-		lc = randBytes(8)
-		zc = randBytes(8)
-	}
+	lc := randBytes(8)
+	zc := randBytes(8)
 	return rTxs, lc, zc, nil
 }
 

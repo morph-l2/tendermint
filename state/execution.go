@@ -128,6 +128,11 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 		if blockData != nil {
 			txs, l2Config, zkConfig = blockData.Txs, blockData.L2Config, blockData.ZKConfig
 			blockExec.notifier.CleanBlockData()
+		} else {
+			txs, l2Config, zkConfig, err = l2Node.RequestBlockData(height)
+			if err != nil {
+				return nil, err
+			}
 		}
 	} else {
 		txs, l2Config, zkConfig, err = l2Node.RequestBlockData(height)
