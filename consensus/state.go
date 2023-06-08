@@ -1327,7 +1327,6 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 	// TODO: only for test
 	if len(cs.ProposalBlock.Data.L2Config) == 0 || len(cs.ProposalBlock.Data.ZkConfig) == 0 {
 		logger.Error("nil config")
-		return
 	}
 
 	// request l2node to check whether the block data is valid
@@ -1725,7 +1724,6 @@ func (cs *State) finalizeCommit(height int64) {
 	// TODO: only for test
 	if len(block.Data.L2Config) == 0 || len(block.Data.ZkConfig) == 0 {
 		logger.Error("error3: nil config")
-		return
 	}
 
 	validators := l2node.GetValidators(seenCommit)

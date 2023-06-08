@@ -99,6 +99,7 @@ func (l *MockL2Node) RequestBlockData(
 	zkConfig []byte,
 	err error,
 ) {
+	fmt.Println("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
 	var rTxs [][]byte
 	for i := int(0); i < l.txNumber; i++ {
 		rTxs = append(rTxs, randBytes(10))
