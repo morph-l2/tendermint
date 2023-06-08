@@ -148,6 +148,7 @@ func (l MockL2Node) DeliverBlock(
 	fmt.Println(l2Config)
 	fmt.Println(zkConfig)
 	fmt.Println(validators)
+	fmt.Println(blsSignatures)
 	fmt.Println("============================================================")
 	return nil
 }
