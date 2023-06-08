@@ -55,9 +55,9 @@ func ConvertTxsToBytes(txs []types.Tx) [][]byte {
 
 func GetValidators(commit *types.Commit) []types.Address {
 	var validators []types.Address
-	fmt.Println("===========================")
+	// fmt.Println("===========================")
 	for _, signature := range commit.Signatures {
-		fmt.Println(len(signature.ValidatorAddress))
+		// fmt.Println(len(signature.ValidatorAddress))
 		// TODO return err if len(signature.ValidatorAddress) == 0 {}
 		validators = append(validators, signature.ValidatorAddress)
 	}
@@ -66,9 +66,9 @@ func GetValidators(commit *types.Commit) []types.Address {
 
 func GetBLSSignatures(commit *types.Commit) [][]byte {
 	var blsSignatures [][]byte
-	fmt.Println("===========================")
+	// fmt.Println("===========================")
 	for _, signature := range commit.Signatures {
-		fmt.Println(len(signature.BLSSignature))
+		// fmt.Println(len(signature.BLSSignature))
 		// TODO return err if len(signature.BLSSignature) == 0
 		blsSignatures = append(blsSignatures, signature.BLSSignature)
 	}
@@ -83,7 +83,7 @@ type MockL2Node struct {
 
 func NewMockL2Node(n int) L2Node {
 	return &MockL2Node{
-		txNumber:     n,
+		txNumber: n,
 	}
 }
 
@@ -99,13 +99,20 @@ func (l *MockL2Node) RequestBlockData(
 	zkConfig []byte,
 	err error,
 ) {
-	fmt.Println("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+	fmt.Println("============================================================")
+	fmt.Println("RequestBlockData")
+	fmt.Println(height)
+	fmt.Println("============================================================")
 	var rTxs [][]byte
 	for i := int(0); i < l.txNumber; i++ {
 		rTxs = append(rTxs, randBytes(10))
 	}
-	lc := randBytes(8)
-	zc := randBytes(8)
+	var lc []byte
+	var zc []byte
+	if l.txNumber > 0 {
+		lc = randBytes(8)
+		zc = randBytes(8)
+	}
 	return rTxs, lc, zc, nil
 }
 
@@ -117,6 +124,12 @@ func (l MockL2Node) CheckBlockData(
 	valid bool,
 	err error,
 ) {
+	fmt.Println("============================================================")
+	fmt.Println("CheckBlockData")
+	fmt.Println(txs)
+	fmt.Println(l2Config)
+	fmt.Println(zkConfig)
+	fmt.Println("============================================================")
 	return true, nil
 }
 
@@ -129,6 +142,13 @@ func (l MockL2Node) DeliverBlock(
 ) (
 	err error,
 ) {
+	fmt.Println("============================================================")
+	fmt.Println("DeliverBlock")
+	fmt.Println(txs)
+	fmt.Println(l2Config)
+	fmt.Println(zkConfig)
+	fmt.Println(validators)
+	fmt.Println("============================================================")
 	return nil
 }
 

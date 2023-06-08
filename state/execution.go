@@ -119,10 +119,6 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 
 	// txs := blockExec.mempool.ReapMaxBytesMaxGas(maxDataBytes, maxGas)
 
-	fmt.Println("============================================================")
-	fmt.Println("RequestBlockData")
-	fmt.Println("============================================================")
-
 	var txs [][]byte
 	var l2Config []byte
 	var zkConfig []byte

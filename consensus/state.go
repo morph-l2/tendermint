@@ -1330,9 +1330,6 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 	}
 
 	// request l2node to check whether the block data is valid
-	fmt.Println("============================================================")
-	fmt.Println("CheckBlockData")
-	fmt.Println("============================================================")
 	valid, err := cs.l2Node.CheckBlockData(l2node.ConvertTxsToBytes(cs.ProposalBlock.Data.Txs), cs.ProposalBlock.Data.L2Config, cs.ProposalBlock.Data.ZkConfig)
 	if err != nil {
 		logger.Error("check block data failed", err)
@@ -1733,9 +1730,6 @@ func (cs *State) finalizeCommit(height int64) {
 		return
 	}
 
-	fmt.Println("============================================================")
-	fmt.Println("DeliverBlock")
-	fmt.Println("============================================================")
 	if err := cs.l2Node.DeliverBlock(
 		l2node.ConvertTxsToBytes(block.Data.Txs),
 		block.Data.L2Config,
