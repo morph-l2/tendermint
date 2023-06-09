@@ -2318,16 +2318,31 @@ func (cs *State) signVote(
 	vote.Signature = v.Signature
 	vote.Timestamp = v.Timestamp
 
-	// Sign block data
 	if cs.ProposalBlock == nil {
 		return vote, nil
 	}
 
-	sig, err := blssignatures.SignMessage(*cs.blsPrivKey, cs.ProposalBlock.Data.ZKHash())
-	if err != nil {
-		return nil, err
+	if cs.ProposalBlock.Height == cs.state.InitialHeight {
+		return vote, nil
 	}
-	vote.BLSSignature = blssignatures.SignatureToBytes(sig)
+
+	// TODO add to config
+	batchInterval := int64(5)
+	batchStartHeight := GetBatchStartHeight(cs.state.InitialHeight, cs.ProposalBlock, cs.blockStore)
+	if IsBatchPoint(cs.ProposalBlock.Height, batchStartHeight, batchInterval) {
+		sig, err := blssignatures.SignMessage(
+			*cs.blsPrivKey,
+			BatchContextHash(
+				batchStartHeight,
+				cs.blockStore,
+				cs.ProposalBlock,
+			),
+		)
+		if err != nil {
+			return nil, err
+		}
+		vote.BLSSignature = blssignatures.SignatureToBytes(sig)
+	}
 
 	return vote, nil
 }

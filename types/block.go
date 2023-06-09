@@ -20,8 +20,6 @@ import (
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	tmversion "github.com/tendermint/tendermint/proto/tendermint/version"
 	"github.com/tendermint/tendermint/version"
-
-	ethcrypto "github.com/scroll-tech/go-ethereum/crypto"
 )
 
 const (
@@ -729,6 +727,7 @@ func (cs *CommitSig) ToProto() *tmproto.CommitSig {
 		ValidatorAddress: cs.ValidatorAddress,
 		Timestamp:        cs.Timestamp,
 		Signature:        cs.Signature,
+		BLSSignature:     cs.BLSSignature,
 	}
 }
 
@@ -806,6 +805,7 @@ func (commit *Commit) GetVote(valIdx int32) *Vote {
 		ValidatorAddress: commitSig.ValidatorAddress,
 		ValidatorIndex:   valIdx,
 		Signature:        commitSig.Signature,
+		BLSSignature:     commitSig.BLSSignature,
 	}
 }
 
@@ -1029,27 +1029,6 @@ func (data *Data) Hash() tmbytes.HexBytes {
 		})
 	}
 	return data.hash
-}
-
-// Hash returns the hash of the data
-func (data *Data) ZKHash() tmbytes.HexBytes {
-	// TODO: handle nil block
-
-	if data.zkHash == nil {
-		var txsBytes []byte
-
-		for _, tx := range data.Txs {
-			txsBytes = append(txsBytes, tx...)
-		}
-
-		data.zkHash = ethcrypto.Keccak256(
-			append(
-				ethcrypto.Keccak256(txsBytes),
-				ethcrypto.Keccak256(data.ZkConfig)...,
-			),
-		)
-	}
-	return data.zkHash
 }
 
 // StringIndented returns an indented string representation of the transactions.

@@ -462,8 +462,7 @@ func extendedCommitInfo(c abci.CommitInfo) abci.ExtendedCommitInfo {
 	}
 }
 
-func validateValidatorUpdates(abciUpdates []abci.ValidatorUpdate,
-	params types.ValidatorParams) error {
+func validateValidatorUpdates(abciUpdates []abci.ValidatorUpdate, params types.ValidatorParams) error {
 	for _, valUpdate := range abciUpdates {
 		if valUpdate.GetPower() < 0 {
 			return fmt.Errorf("voting power can't be negative %v", valUpdate)
