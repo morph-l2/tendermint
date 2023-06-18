@@ -434,7 +434,7 @@ chunk_fetchers = "{{ .StateSync.ChunkFetchers }}"
 [blocksync]
 
 # Block Sync version to use:
-# 
+#
 # In v0.37, v1 and v2 of the block sync protocols were deprecated.
 # Please use v0 instead.
 #
@@ -481,6 +481,11 @@ create_empty_blocks_interval = "{{ .Consensus.CreateEmptyBlocksInterval }}"
 # Reactor sleep duration parameters
 peer_gossip_sleep_duration = "{{ .Consensus.PeerGossipSleepDuration }}"
 peer_query_maj23_sleep_duration = "{{ .Consensus.PeerQueryMaj23SleepDuration }}"
+
+# Batch interval parameters
+batch_blocks_interval = "10"
+batch_max_bytes = "8388608"
+batch_timeout = "60s"
 
 #######################################################
 ###         Storage Configuration Options           ###

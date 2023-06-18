@@ -1143,6 +1143,15 @@ func (cs *State) isProposer(address []byte) bool {
 	return bytes.Equal(cs.Validators.GetProposer().Address, address)
 }
 
+func (cs *State) isValidator(address []byte) bool {
+	for _, v := range cs.Validators.Validators {
+		if bytes.Equal(v.Address, address) {
+			return true
+		}
+	}
+	return false
+}
+
 func (cs *State) defaultDecideProposal(height int64, round int32) {
 	var block *types.Block
 	var blockParts *types.PartSet
@@ -1331,15 +1340,17 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 		panic("nil config")
 	}
 
-	// request l2node to check whether the block data is valid
-	valid, err := cs.l2Node.CheckBlockData(l2node.ConvertTxsToBytes(cs.ProposalBlock.Data.Txs), cs.ProposalBlock.Data.L2Config, cs.ProposalBlock.Data.ZkConfig)
-	if err != nil {
-		logger.Error("check block data failed", err)
-		return
-	}
-	if !valid {
-		logger.Error("block data is invalid")
-		return
+	if cs.isValidator(cs.privValidatorPubKey.Address()) {
+		// request l2node to check whether the block data is valid
+		valid, err := cs.l2Node.CheckBlockData(l2node.ConvertTxsToBytes(cs.ProposalBlock.Data.Txs), cs.ProposalBlock.Data.L2Config, cs.ProposalBlock.Data.ZkConfig)
+		if err != nil {
+			logger.Error("check block data failed", err)
+			return
+		}
+		if !valid {
+			logger.Error("block data is invalid")
+			return
+		}
 	}
 
 	// Vote nil if the Application rejected the block
@@ -2326,17 +2337,16 @@ func (cs *State) signVote(
 		return vote, nil
 	}
 
-	// TODO add to config
-	batchInterval := int64(5)
-	batchStartHeight := GetBatchStartHeight(cs.state.InitialHeight, cs.ProposalBlock, cs.blockStore)
-	if IsBatchPoint(cs.ProposalBlock.Height, batchStartHeight, batchInterval) {
+	batchStartHeight, batchStartTime := cs.getBatchStartHeight()
+	batchContext := cs.batchContext(batchStartHeight)
+	fmt.Println("========================")
+	fmt.Println(batchStartHeight)
+	fmt.Println(batchContext)
+	fmt.Println("========================")
+	if cs.isBatchPoint(batchStartHeight, batchContext, batchStartTime) {
 		sig, err := blssignatures.SignMessage(
 			*cs.blsPrivKey,
-			BatchContextHash(
-				batchStartHeight,
-				cs.blockStore,
-				cs.ProposalBlock,
-			),
+			cs.batchContextHash(batchContext),
 		)
 		if err != nil {
 			return nil, err

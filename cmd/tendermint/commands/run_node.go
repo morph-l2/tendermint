@@ -28,7 +28,8 @@ func AddNodeFlags(cmd *cobra.Command) {
 	cmd.Flags().String(
 		"priv_validator_laddr",
 		config.PrivValidatorListenAddr,
-		"socket address to listen on for connections from external priv_validator process")
+		"socket address to listen on for connections from external priv_validator process",
+	)
 
 	// node flags
 	cmd.Flags().Bool("block_sync", config.BlockSyncMode, "sync the block chain using the blocksync algorithm")
@@ -36,17 +37,20 @@ func AddNodeFlags(cmd *cobra.Command) {
 		&genesisHash,
 		"genesis_hash",
 		[]byte{},
-		"optional SHA-256 hash of the genesis file")
-	cmd.Flags().Int64("consensus.double_sign_check_height", config.Consensus.DoubleSignCheckHeight,
-		"how many blocks to look back to check existence of the node's "+
-			"consensus votes before joining consensus")
+		"optional SHA-256 hash of the genesis file",
+	)
+	cmd.Flags().Int64(
+		"consensus.double_sign_check_height",
+		config.Consensus.DoubleSignCheckHeight,
+		"how many blocks to look back to check existence of the node's consensus votes before joining consensus",
+	)
 
 	// abci flags
 	cmd.Flags().String(
 		"proxy_app",
 		config.ProxyApp,
-		"proxy app address, or one of: 'kvstore',"+
-			" 'persistent_kvstore' or 'noop' for local testing.")
+		"proxy app address, or one of: 'kvstore', 'persistent_kvstore' or 'noop' for local testing.",
+	)
 	cmd.Flags().String("abci", config.ABCI, "specify abci transport (socket | grpc)")
 
 	// rpc flags
@@ -54,7 +58,8 @@ func AddNodeFlags(cmd *cobra.Command) {
 	cmd.Flags().String(
 		"rpc.grpc_laddr",
 		config.RPC.GRPCListenAddress,
-		"GRPC listen address (BroadcastTx only). Port required")
+		"GRPC listen address (BroadcastTx only). Port required",
+	)
 	cmd.Flags().Bool("rpc.unsafe", config.RPC.Unsafe, "enabled unsafe rpc methods")
 	cmd.Flags().String("rpc.pprof_laddr", config.RPC.PprofListenAddress, "pprof listen address (https://golang.org/pkg/net/http/pprof)")
 
@@ -62,12 +67,12 @@ func AddNodeFlags(cmd *cobra.Command) {
 	cmd.Flags().String(
 		"p2p.laddr",
 		config.P2P.ListenAddress,
-		"node listen address. (0.0.0.0:0 means any interface, any port)")
+		"node listen address. (0.0.0.0:0 means any interface, any port)",
+	)
 	cmd.Flags().String("p2p.external-address", config.P2P.ExternalAddress, "ip:port address to advertise to peers for them to dial")
 	cmd.Flags().String("p2p.seeds", config.P2P.Seeds, "comma-delimited ID@host:port seed nodes")
 	cmd.Flags().String("p2p.persistent_peers", config.P2P.PersistentPeers, "comma-delimited ID@host:port persistent peers")
-	cmd.Flags().String("p2p.unconditional_peer_ids",
-		config.P2P.UnconditionalPeerIDs, "comma-delimited IDs of unconditional peers")
+	cmd.Flags().String("p2p.unconditional_peer_ids", config.P2P.UnconditionalPeerIDs, "comma-delimited IDs of unconditional peers")
 	cmd.Flags().Bool("p2p.upnp", config.P2P.UPNP, "enable/disable UPNP port forwarding")
 	cmd.Flags().Bool("p2p.pex", config.P2P.PexReactor, "enable/disable Peer-Exchange")
 	cmd.Flags().Bool("p2p.seed_mode", config.P2P.SeedMode, "enable/disable seed mode")
@@ -77,21 +82,25 @@ func AddNodeFlags(cmd *cobra.Command) {
 	cmd.Flags().Bool(
 		"consensus.create_empty_blocks",
 		config.Consensus.CreateEmptyBlocks,
-		"set this to false to only produce blocks when there are txs or when the AppHash changes")
+		"set this to false to only produce blocks when there are txs or when the AppHash changes",
+	)
 	cmd.Flags().String(
 		"consensus.create_empty_blocks_interval",
 		config.Consensus.CreateEmptyBlocksInterval.String(),
-		"the possible interval between empty blocks")
+		"the possible interval between empty blocks",
+	)
 
 	// db flags
 	cmd.Flags().String(
 		"db_backend",
 		config.DBBackend,
-		"database backend: goleveldb | cleveldb | boltdb | rocksdb | badgerdb")
+		"database backend: goleveldb | cleveldb | boltdb | rocksdb | badgerdb",
+	)
 	cmd.Flags().String(
 		"db_dir",
 		config.DBPath,
-		"database directory")
+		"database directory",
+	)
 }
 
 // NewRunNodeCmd returns the command that allows the CLI to start a node.
@@ -156,7 +165,8 @@ func checkGenesisHash(config *cfg.Config) error {
 	if !bytes.Equal(genesisHash, actualHash) {
 		return fmt.Errorf(
 			"--genesis_hash=%X does not match %s hash: %X",
-			genesisHash, config.GenesisFile(), actualHash)
+			genesisHash, config.GenesisFile(), actualHash,
+		)
 	}
 
 	return nil
