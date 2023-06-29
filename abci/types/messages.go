@@ -55,12 +55,6 @@ func ToRequestDeliverTx(req RequestDeliverTx) *Request {
 	}
 }
 
-func ToRequestCheckTx(req RequestCheckTx) *Request {
-	return &Request{
-		Value: &Request_CheckTx{&req},
-	}
-}
-
 func ToRequestCommit() *Request {
 	return &Request{
 		Value: &Request_Commit{&RequestCommit{}},
@@ -156,12 +150,6 @@ func ToResponseInfo(res ResponseInfo) *Response {
 func ToResponseDeliverTx(res ResponseDeliverTx) *Response {
 	return &Response{
 		Value: &Response_DeliverTx{&res},
-	}
-}
-
-func ToResponseCheckTx(res ResponseCheckTx) *Response {
-	return &Response{
-		Value: &Response_CheckTx{&res},
 	}
 }
 

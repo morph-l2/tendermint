@@ -15,18 +15,15 @@ func TestDefaultConfig(t *testing.T) {
 	// set up some defaults
 	cfg := DefaultConfig()
 	assert.NotNil(cfg.P2P)
-	assert.NotNil(cfg.Mempool)
 	assert.NotNil(cfg.Consensus)
 
 	// check the root dir stuff...
 	cfg.SetRoot("/foo")
 	cfg.Genesis = "bar"
 	cfg.DBPath = "/opt/data"
-	cfg.Mempool.WalPath = "wal/mem/"
 
 	assert.Equal("/foo/bar", cfg.GenesisFile())
 	assert.Equal("/opt/data", cfg.DBDir())
-	assert.Equal("/foo/wal/mem", cfg.Mempool.WalDir())
 
 }
 
@@ -96,24 +93,6 @@ func TestP2PConfigValidateBasic(t *testing.T) {
 		"MaxPacketMsgPayloadSize",
 		"SendRate",
 		"RecvRate",
-	}
-
-	for _, fieldName := range fieldsToTest {
-		reflect.ValueOf(cfg).Elem().FieldByName(fieldName).SetInt(-1)
-		assert.Error(t, cfg.ValidateBasic())
-		reflect.ValueOf(cfg).Elem().FieldByName(fieldName).SetInt(0)
-	}
-}
-
-func TestMempoolConfigValidateBasic(t *testing.T) {
-	cfg := TestMempoolConfig()
-	assert.NoError(t, cfg.ValidateBasic())
-
-	fieldsToTest := []string{
-		"Size",
-		"MaxTxsBytes",
-		"CacheSize",
-		"MaxTxBytes",
 	}
 
 	for _, fieldName := range fieldsToTest {

@@ -3,7 +3,6 @@ package mock_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,8 +22,6 @@ func TestABCIMock(t *testing.T) {
 
 	key, value := []byte("foo"), []byte("bar")
 	height := int64(10)
-	goodTx := types.Tx{0x01, 0xff}
-	badTx := types.Tx{0x12, 0x21}
 
 	m := mock.ABCIMock{
 		Info: mock.Call{Error: errors.New("foobar")},
@@ -33,15 +30,6 @@ func TestABCIMock(t *testing.T) {
 			Value:  value,
 			Height: height,
 		}},
-		// Broadcast commit depends on call
-		BroadcastCommit: mock.Call{
-			Args: goodTx,
-			Response: &ctypes.ResultBroadcastTxCommit{
-				CheckTx:   abci.ResponseCheckTx{Data: bytes.HexBytes("stand")},
-				DeliverTx: abci.ResponseDeliverTx{Data: bytes.HexBytes("deliver")},
-			},
-			Error: errors.New("bad tx"),
-		},
 		Broadcast: mock.Call{Error: errors.New("must commit")},
 	}
 
@@ -58,24 +46,6 @@ func TestABCIMock(t *testing.T) {
 	assert.EqualValues(key, query.Key)
 	assert.EqualValues(value, query.Value)
 	assert.Equal(height, query.Height)
-
-	// non-commit calls always return errors
-	_, err = m.BroadcastTxSync(context.Background(), goodTx)
-	require.NotNil(err)
-	assert.Equal("must commit", err.Error())
-	_, err = m.BroadcastTxAsync(context.Background(), goodTx)
-	require.NotNil(err)
-	assert.Equal("must commit", err.Error())
-
-	// commit depends on the input
-	_, err = m.BroadcastTxCommit(context.Background(), badTx)
-	require.NotNil(err)
-	assert.Equal("bad tx", err.Error())
-	bres, err := m.BroadcastTxCommit(context.Background(), goodTx)
-	require.Nil(err, "%+v", err)
-	assert.EqualValues(0, bres.CheckTx.Code)
-	assert.EqualValues("stand", bres.CheckTx.Data)
-	assert.EqualValues("deliver", bres.DeliverTx.Data)
 }
 
 func TestABCIRecorder(t *testing.T) {
@@ -87,9 +57,8 @@ func TestABCIRecorder(t *testing.T) {
 			Data:    "data",
 			Version: "v0.9.9",
 		}},
-		Query:           mock.Call{Error: errors.New("query")},
-		Broadcast:       mock.Call{Error: errors.New("broadcast")},
-		BroadcastCommit: mock.Call{Error: errors.New("broadcast_commit")},
+		Query:     mock.Call{Error: errors.New("query")},
+		Broadcast: mock.Call{Error: errors.New("broadcast")},
 	}
 	r := mock.NewABCIRecorder(m)
 
@@ -131,12 +100,6 @@ func TestABCIRecorder(t *testing.T) {
 
 	// now add some broadcasts (should all err)
 	txs := []types.Tx{{1}, {2}, {3}}
-	_, err = r.BroadcastTxCommit(context.Background(), txs[0])
-	assert.NotNil(err, "expected err on broadcast")
-	_, err = r.BroadcastTxSync(context.Background(), txs[1])
-	assert.NotNil(err, "expected err on broadcast")
-	_, err = r.BroadcastTxAsync(context.Background(), txs[2])
-	assert.NotNil(err, "expected err on broadcast")
 
 	require.Equal(5, len(r.Calls))
 
@@ -168,32 +131,4 @@ func TestABCIApp(t *testing.T) {
 	info, err := m.ABCIInfo(context.Background())
 	require.Nil(err)
 	assert.Equal(`{"size":0}`, info.Response.GetData())
-
-	// add a key
-	key, value := "foo", "bar"
-	tx := fmt.Sprintf("%s=%s", key, value)
-	res, err := m.BroadcastTxCommit(context.Background(), types.Tx(tx))
-	require.Nil(err)
-	assert.True(res.CheckTx.IsOK())
-	require.NotNil(res.DeliverTx)
-	assert.True(res.DeliverTx.IsOK())
-
-	// commit
-	// TODO: This may not be necessary in the future
-	if res.Height == -1 {
-		m.App.Commit()
-	}
-
-	// check the key
-	_qres, err := m.ABCIQueryWithOptions(
-		context.Background(),
-		"/key",
-		bytes.HexBytes(key),
-		client.ABCIQueryOptions{Prove: true},
-	)
-	qres := _qres.Response
-	require.Nil(err)
-	assert.EqualValues(value, qres.Value)
-
-	// XXX Check proof
 }

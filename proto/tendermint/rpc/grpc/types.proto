@@ -18,15 +18,9 @@ message RequestBroadcastTx {
 
 message ResponsePing {}
 
-message ResponseBroadcastTx {
-  tendermint.abci.ResponseCheckTx   check_tx   = 1;
-  tendermint.abci.ResponseDeliverTx deliver_tx = 2;
-}
-
 //----------------------------------------
 // Service Definition
 
 service BroadcastAPI {
   rpc Ping(RequestPing) returns (ResponsePing);
-  rpc BroadcastTx(RequestBroadcastTx) returns (ResponseBroadcastTx);
 }

@@ -317,7 +317,7 @@ func newConsensusStateForReplay(config cfg.BaseConfig, csConfig *cfg.ConsensusCo
 		tmos.Exit(err.Error())
 	}
 
-	// Create proxyAppConn connection (consensus, mempool, query)
+	// Create proxyAppConn connection (consensus, query)
 	clientCreator := proxy.DefaultClientCreator(config.ProxyApp, config.ABCI, config.DBDir())
 	proxyApp := proxy.NewAppConns(clientCreator, proxy.NopMetrics())
 	err = proxyApp.Start()
@@ -337,7 +337,7 @@ func newConsensusStateForReplay(config cfg.BaseConfig, csConfig *cfg.ConsensusCo
 		tmos.Exit(fmt.Sprintf("Error on handshake: %v", err))
 	}
 
-	notifier, mempool, evpool := &l2node.Notifier{}, emptyMempool{}, sm.EmptyEvidencePool{}
+	notifier, evpool := &l2node.Notifier{}, sm.EmptyEvidencePool{}
 
 	blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyApp.Consensus(), notifier, evpool)
 
@@ -347,7 +347,7 @@ func newConsensusStateForReplay(config cfg.BaseConfig, csConfig *cfg.ConsensusCo
 		state.Copy(),
 		blockExec,
 		blockStore,
-		mempool,
+		notifier,
 		evpool,
 	)
 

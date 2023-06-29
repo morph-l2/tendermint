@@ -140,7 +140,6 @@ func addCommands() {
 	RootCmd.AddCommand(echoCmd)
 	RootCmd.AddCommand(infoCmd)
 	RootCmd.AddCommand(deliverTxCmd)
-	RootCmd.AddCommand(checkTxCmd)
 	RootCmd.AddCommand(commitCmd)
 	RootCmd.AddCommand(versionCmd)
 	RootCmd.AddCommand(testCmd)
@@ -212,14 +211,6 @@ var deliverTxCmd = &cobra.Command{
 	Long:  "deliver a new transaction to the application",
 	Args:  cobra.ExactArgs(1),
 	RunE:  cmdDeliverTx,
-}
-
-var checkTxCmd = &cobra.Command{
-	Use:   "check_tx",
-	Short: "validate a transaction",
-	Long:  "validate a transaction",
-	Args:  cobra.ExactArgs(1),
-	RunE:  cmdCheckTx,
 }
 
 var commitCmd = &cobra.Command{
@@ -426,8 +417,6 @@ func muxOnCommands(cmd *cobra.Command, pArgs []string) error {
 	cmd.Use = subCommand // for later print statements ...
 
 	switch strings.ToLower(subCommand) {
-	case "check_tx":
-		return cmdCheckTx(cmd, actualArgs)
 	case "commit":
 		return cmdCommit(cmd, actualArgs)
 	case "deliver_tx":
@@ -461,7 +450,6 @@ func cmdUnimplemented(cmd *cobra.Command, args []string) error {
 	fmt.Println("Available commands:")
 	fmt.Printf("%s: %s\n", echoCmd.Use, echoCmd.Short)
 	fmt.Printf("%s: %s\n", infoCmd.Use, infoCmd.Short)
-	fmt.Printf("%s: %s\n", checkTxCmd.Use, checkTxCmd.Short)
 	fmt.Printf("%s: %s\n", deliverTxCmd.Use, deliverTxCmd.Short)
 	fmt.Printf("%s: %s\n", queryCmd.Use, queryCmd.Short)
 	fmt.Printf("%s: %s\n", commitCmd.Use, commitCmd.Short)
@@ -518,32 +506,6 @@ func cmdDeliverTx(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	res, err := client.DeliverTxSync(types.RequestDeliverTx{Tx: txBytes})
-	if err != nil {
-		return err
-	}
-	printResponse(cmd, args, response{
-		Code: res.Code,
-		Data: res.Data,
-		Info: res.Info,
-		Log:  res.Log,
-	})
-	return nil
-}
-
-// Validate a tx
-func cmdCheckTx(cmd *cobra.Command, args []string) error {
-	if len(args) == 0 {
-		printResponse(cmd, args, response{
-			Code: codeBad,
-			Info: "want the tx",
-		})
-		return nil
-	}
-	txBytes, err := stringOrHexToBytes(args[0])
-	if err != nil {
-		return err
-	}
-	res, err := client.CheckTxSync(types.RequestCheckTx{Tx: txBytes})
 	if err != nil {
 		return err
 	}

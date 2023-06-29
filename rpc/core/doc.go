@@ -24,7 +24,6 @@ Available endpoints:
 /status
 /health
 /unconfirmed_txs
-/unsafe_flush_mempool
 /validators
 
 Endpoints that require arguments:

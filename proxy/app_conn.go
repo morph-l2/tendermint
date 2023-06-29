@@ -27,17 +27,6 @@ type AppConnConsensus interface {
 	CommitSync() (*types.ResponseCommit, error)
 }
 
-type AppConnMempool interface {
-	SetResponseCallback(abcicli.Callback)
-	Error() error
-
-	CheckTxAsync(types.RequestCheckTx) *abcicli.ReqRes
-	CheckTxSync(types.RequestCheckTx) (*types.ResponseCheckTx, error)
-
-	FlushAsync() *abcicli.ReqRes
-	FlushSync() error
-}
-
 type AppConnQuery interface {
 	Error() error
 
@@ -114,49 +103,6 @@ func (app *appConnConsensus) EndBlockSync(req types.RequestEndBlock) (*types.Res
 func (app *appConnConsensus) CommitSync() (*types.ResponseCommit, error) {
 	defer addTimeSample(app.metrics.MethodTimingSeconds.With("method", "commit", "type", "sync"))()
 	return app.appConn.CommitSync()
-}
-
-//------------------------------------------------
-// Implements AppConnMempool (subset of abcicli.Client)
-
-type appConnMempool struct {
-	metrics *Metrics
-	appConn abcicli.Client
-}
-
-func NewAppConnMempool(appConn abcicli.Client, metrics *Metrics) AppConnMempool {
-	return &appConnMempool{
-		metrics: metrics,
-		appConn: appConn,
-	}
-}
-
-func (app *appConnMempool) SetResponseCallback(cb abcicli.Callback) {
-	app.appConn.SetResponseCallback(cb)
-}
-
-func (app *appConnMempool) Error() error {
-	return app.appConn.Error()
-}
-
-func (app *appConnMempool) FlushAsync() *abcicli.ReqRes {
-	defer addTimeSample(app.metrics.MethodTimingSeconds.With("method", "flush", "type", "async"))()
-	return app.appConn.FlushAsync()
-}
-
-func (app *appConnMempool) FlushSync() error {
-	defer addTimeSample(app.metrics.MethodTimingSeconds.With("method", "flush", "type", "sync"))()
-	return app.appConn.FlushSync()
-}
-
-func (app *appConnMempool) CheckTxAsync(req types.RequestCheckTx) *abcicli.ReqRes {
-	defer addTimeSample(app.metrics.MethodTimingSeconds.With("method", "check_tx", "type", "async"))()
-	return app.appConn.CheckTxAsync(req)
-}
-
-func (app *appConnMempool) CheckTxSync(req types.RequestCheckTx) (*types.ResponseCheckTx, error) {
-	defer addTimeSample(app.metrics.MethodTimingSeconds.With("method", "check_tx", "type", "sync"))()
-	return app.appConn.CheckTxSync(req)
 }
 
 //------------------------------------------------

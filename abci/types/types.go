@@ -12,16 +12,6 @@ const (
 )
 
 // IsOK returns true if Code is OK.
-func (r ResponseCheckTx) IsOK() bool {
-	return r.Code == CodeTypeOK
-}
-
-// IsErr returns true if Code is something other than OK.
-func (r ResponseCheckTx) IsErr() bool {
-	return r.Code != CodeTypeOK
-}
-
-// IsOK returns true if Code is OK.
 func (r ResponseDeliverTx) IsOK() bool {
 	return r.Code == CodeTypeOK
 }
@@ -61,16 +51,6 @@ var (
 	}
 	jsonpbUnmarshaller = jsonpb.Unmarshaler{}
 )
-
-func (r *ResponseCheckTx) MarshalJSON() ([]byte, error) {
-	s, err := jsonpbMarshaller.MarshalToString(r)
-	return []byte(s), err
-}
-
-func (r *ResponseCheckTx) UnmarshalJSON(b []byte) error {
-	reader := bytes.NewBuffer(b)
-	return jsonpbUnmarshaller.Unmarshal(reader, r)
-}
 
 func (r *ResponseDeliverTx) MarshalJSON() ([]byte, error) {
 	s, err := jsonpbMarshaller.MarshalToString(r)
@@ -125,6 +105,5 @@ type jsonRoundTripper interface {
 var _ jsonRoundTripper = (*ResponseCommit)(nil)
 var _ jsonRoundTripper = (*ResponseQuery)(nil)
 var _ jsonRoundTripper = (*ResponseDeliverTx)(nil)
-var _ jsonRoundTripper = (*ResponseCheckTx)(nil)
 
 var _ jsonRoundTripper = (*EventAttribute)(nil)

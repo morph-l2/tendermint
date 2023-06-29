@@ -253,7 +253,8 @@ func (h *Handshaker) Handshake(proxyApp proxy.AppConns) error {
 	}
 	appHash := res.LastBlockAppHash
 
-	h.logger.Info("ABCI Handshake App Info",
+	h.logger.Info(
+		"ABCI Handshake App Info",
 		"height", blockHeight,
 		"hash", appHash,
 		"software-version", res.Version,
@@ -271,10 +272,7 @@ func (h *Handshaker) Handshake(proxyApp proxy.AppConns) error {
 		return fmt.Errorf("error on replay: %v", err)
 	}
 
-	h.logger.Info("Completed ABCI Handshake - Tendermint and App are synced",
-		"appHeight", blockHeight, "appHash", appHash)
-
-	// TODO: (on restart) replay mempool
+	h.logger.Info("Completed ABCI Handshake - Tendermint and App are synced", "appHeight", blockHeight, "appHash", appHash)
 
 	return nil
 }
@@ -495,8 +493,7 @@ func (h *Handshaker) replayBlock(state sm.State, height int64, proxyApp proxy.Ap
 	block := h.store.LoadBlock(height)
 	meta := h.store.LoadBlockMeta(height)
 
-	// Use stubs for both mempool and evidence pool since no transactions nor
-	// evidence are needed here - block already exists.
+	// Use stubs for evidence pool since no transactions nor evidence are needed here - block already exists.
 	blockExec := sm.NewBlockExecutor(h.stateStore, h.logger, proxyApp, &l2node.Notifier{}, sm.EmptyEvidencePool{})
 	blockExec.SetEventBus(h.eventBus)
 

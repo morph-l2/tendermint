@@ -10,7 +10,6 @@ require (
 	github.com/btcsuite/btcd/btcutil v1.1.2
 	github.com/bufbuild/buf v1.7.0
 	github.com/cosmos/gogoproto v1.4.1
-	github.com/creachadair/taskgroup v0.3.2
 	github.com/fortytw2/leaktest v1.3.0
 	github.com/go-kit/kit v0.12.0
 	github.com/go-kit/log v0.2.1

@@ -11,7 +11,6 @@ import (
 
 const (
 	connConsensus = "consensus"
-	connMempool   = "mempool"
 	connQuery     = "query"
 	connSnapshot  = "snapshot"
 )
@@ -21,8 +20,6 @@ const (
 type AppConns interface {
 	service.Service
 
-	// Mempool connection
-	Mempool() AppConnMempool
 	// Consensus connection
 	Consensus() AppConnConsensus
 	// Query connection
@@ -46,12 +43,10 @@ type multiAppConn struct {
 
 	metrics       *Metrics
 	consensusConn AppConnConsensus
-	mempoolConn   AppConnMempool
 	queryConn     AppConnQuery
 	snapshotConn  AppConnSnapshot
 
 	consensusConnClient abcicli.Client
-	mempoolConnClient   abcicli.Client
 	queryConnClient     abcicli.Client
 	snapshotConnClient  abcicli.Client
 
@@ -66,10 +61,6 @@ func NewMultiAppConn(clientCreator ClientCreator, metrics *Metrics) AppConns {
 	}
 	multiAppConn.BaseService = *service.NewBaseService(nil, "multiAppConn", multiAppConn)
 	return multiAppConn
-}
-
-func (app *multiAppConn) Mempool() AppConnMempool {
-	return app.mempoolConn
 }
 
 func (app *multiAppConn) Consensus() AppConnConsensus {
@@ -99,14 +90,6 @@ func (app *multiAppConn) OnStart() error {
 	}
 	app.snapshotConnClient = c
 	app.snapshotConn = NewAppConnSnapshot(c, app.metrics)
-
-	c, err = app.abciClientFor(connMempool)
-	if err != nil {
-		app.stopAllClients()
-		return err
-	}
-	app.mempoolConnClient = c
-	app.mempoolConn = NewAppConnMempool(c, app.metrics)
 
 	c, err = app.abciClientFor(connConsensus)
 	if err != nil {
@@ -142,10 +125,6 @@ func (app *multiAppConn) killTMOnClientError() {
 		if err := app.consensusConnClient.Error(); err != nil {
 			killFn(connConsensus, err, app.Logger)
 		}
-	case <-app.mempoolConnClient.Quit():
-		if err := app.mempoolConnClient.Error(); err != nil {
-			killFn(connMempool, err, app.Logger)
-		}
 	case <-app.queryConnClient.Quit():
 		if err := app.queryConnClient.Error(); err != nil {
 			killFn(connQuery, err, app.Logger)
@@ -161,11 +140,6 @@ func (app *multiAppConn) stopAllClients() {
 	if app.consensusConnClient != nil {
 		if err := app.consensusConnClient.Stop(); err != nil {
 			app.Logger.Error("error while stopping consensus client", "error", err)
-		}
-	}
-	if app.mempoolConnClient != nil {
-		if err := app.mempoolConnClient.Stop(); err != nil {
-			app.Logger.Error("error while stopping mempool client", "error", err)
 		}
 	}
 	if app.queryConnClient != nil {

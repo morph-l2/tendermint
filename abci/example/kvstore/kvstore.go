@@ -121,15 +121,6 @@ func (app *Application) DeliverTx(req types.RequestDeliverTx) types.ResponseDeli
 	return types.ResponseDeliverTx{Code: code.CodeTypeOK, Events: events}
 }
 
-func (app *Application) CheckTx(req types.RequestCheckTx) types.ResponseCheckTx {
-	if req.Type == types.CheckTxType_Recheck {
-		if _, ok := app.txToRemove[string(req.Tx)]; ok {
-			return types.ResponseCheckTx{Code: code.CodeTypeExecuted, GasWanted: 1}
-		}
-	}
-	return types.ResponseCheckTx{Code: code.CodeTypeOK, GasWanted: 1}
-}
-
 func (app *Application) Commit() types.ResponseCommit {
 	// Using a memdb - just return the big endian size of the db
 	appHash := make([]byte, 8)

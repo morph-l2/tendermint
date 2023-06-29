@@ -19,7 +19,7 @@ import (
 //-----------------------------------------------------------------------------
 // BlockExecutor handles block execution and state updates.
 // It exposes ApplyBlock(), which validates & executes the block, updates state w/ ABCI responses,
-// then commits and updates the mempool atomically, then saves state.
+// then commits and saves state.
 
 // BlockExecutor provides the context and accessories for properly executing a block.
 type BlockExecutor struct {
@@ -94,8 +94,8 @@ func (blockExec *BlockExecutor) SetEventBus(eventBus types.BlockEventPublisher) 
 	blockExec.eventBus = eventBus
 }
 
-// CreateProposalBlock calls state.MakeBlock with evidence from the evpool
-// and txs from the mempool. The max bytes must be big enough to fit the commit.
+// CreateProposalBlock calls state.MakeBlock with evidence from the evpool.
+// The max bytes must be big enough to fit the commit.
 // Up to 1/10th of the block space is allcoated for maximum sized evidence.
 // The rest is given to txs, up to the max gas.
 //
@@ -116,8 +116,6 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 
 	// Fetch a limited amount of valid txs
 	maxDataBytes := types.MaxDataBytes(maxBytes, evSize, state.Validators.Size())
-
-	// txs := blockExec.mempool.ReapMaxBytesMaxGas(maxDataBytes, maxGas)
 
 	var txs [][]byte
 	var l2Config []byte
@@ -157,10 +155,6 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 		},
 	)
 	if err != nil {
-		// The App MUST ensure that only valid (and hence 'processable') transactions
-		// enter the mempool. Hence, at this point, we can't have any non-processable
-		// transaction causing an error.
-		//
 		// Also, the App can simply skip any transaction that could cause any kind of trouble.
 		// Either way, we cannot recover in a meaningful way, unless we skip proposing
 		// this block, repair what caused the error and try again. Hence, we return an
@@ -269,7 +263,6 @@ func (blockExec *BlockExecutor) ApplyBlock(
 		return state, 0, fmt.Errorf("commit failed for application: %v", err)
 	}
 
-	// Lock mempool, commit app state, update mempoool.
 	appHash, retainHeight, err := blockExec.Commit(state, block, abciResponses.DeliverTxs)
 	if err != nil {
 		return state, 0, fmt.Errorf("commit failed for application: %v", err)
@@ -295,12 +288,7 @@ func (blockExec *BlockExecutor) ApplyBlock(
 	return state, retainHeight, nil
 }
 
-// Commit locks the mempool, runs the ABCI Commit message, and updates the
-// mempool.
 // It returns the result of calling abci.Commit (the AppHash) and the height to retain (if any).
-// The Mempool must be locked during commit and update because state is
-// typically reset on Commit and old txs must be replayed against committed
-// state before new txs are run in the mempool, lest they be invalid.
 func (blockExec *BlockExecutor) Commit(
 	state State,
 	block *types.Block,

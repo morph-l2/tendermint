@@ -2,7 +2,6 @@ package client_test
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -10,10 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	abci "github.com/tendermint/tendermint/abci/types"
 	tmrand "github.com/tendermint/tendermint/libs/rand"
 	"github.com/tendermint/tendermint/rpc/client"
-	ctypes "github.com/tendermint/tendermint/rpc/core/types"
 	"github.com/tendermint/tendermint/types"
 )
 
@@ -94,64 +91,6 @@ func TestBlockEvents(t *testing.T) {
 
 				require.Equal(t, firstBlockHeight+i, block.Header.Height)
 			}
-		})
-	}
-}
-
-func TestTxEventsSentWithBroadcastTxAsync(t *testing.T) { testTxEventsSent(t, "async") }
-func TestTxEventsSentWithBroadcastTxSync(t *testing.T)  { testTxEventsSent(t, "sync") }
-
-func testTxEventsSent(t *testing.T, broadcastMethod string) {
-	for _, c := range GetClients() {
-		c := c
-		t.Run(reflect.TypeOf(c).String(), func(t *testing.T) {
-
-			// start for this test it if it wasn't already running
-			if !c.IsRunning() {
-				// if so, then we start it, listen, and stop it.
-				err := c.Start()
-				require.Nil(t, err)
-				t.Cleanup(func() {
-					if err := c.Stop(); err != nil {
-						t.Error(err)
-					}
-				})
-			}
-
-			// make the tx
-			_, _, tx := MakeTxKV()
-
-			// send
-			go func() {
-				var (
-					txres *ctypes.ResultBroadcastTx
-					err   error
-					ctx   = context.Background()
-				)
-				switch broadcastMethod {
-				case "async":
-					txres, err = c.BroadcastTxAsync(ctx, tx)
-				case "sync":
-					txres, err = c.BroadcastTxSync(ctx, tx)
-				default:
-					panic(fmt.Sprintf("Unknown broadcastMethod %s", broadcastMethod))
-				}
-				if assert.NoError(t, err) {
-					assert.Equal(t, txres.Code, abci.CodeTypeOK)
-				}
-			}()
-
-			// and wait for confirmation
-			evt, err := client.WaitForOneEvent(c, types.EventTx, waitForEventTimeout)
-			require.Nil(t, err)
-
-			// and make sure it has the proper info
-			txe, ok := evt.(types.EventDataTx)
-			require.True(t, ok)
-
-			// make sure this is the proper tx
-			require.EqualValues(t, tx, txe.Tx)
-			require.True(t, txe.Result.IsOK())
 		})
 	}
 }

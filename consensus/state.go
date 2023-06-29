@@ -62,7 +62,7 @@ func (ti *timeoutInfo) String() string {
 	return fmt.Sprintf("%v ; %d/%d %v", ti.Duration, ti.Height, ti.Round, ti.Step)
 }
 
-// interface to the mempool
+// interface to the txNotifier
 type txNotifier interface {
 	TxsAvailable() <-chan struct{}
 }
@@ -1041,7 +1041,7 @@ func (cs *State) enterNewRound(height int64, round int32) {
 	if err := cs.eventBus.PublishEventNewRound(cs.NewRoundEvent()); err != nil {
 		cs.Logger.Error("failed publishing new round", "err", err)
 	}
-	// Wait for txs to be available in the mempool
+	// Wait for txs to be available
 	// before we enterPropose in round 0. If the last block changed the app hash,
 	// we may need an empty "proof" block, and enterPropose immediately.
 	waitForTxs := cs.config.WaitForTxs() && round == 0 && height != cs.state.InitialHeight
@@ -1078,7 +1078,7 @@ func (cs *State) needProofBlock(height int64) bool {
 //
 //	after enterNewRound(height,round), after timeout of CreateEmptyBlocksInterval
 //
-// Enter (!CreateEmptyBlocks) : after enterNewRound(height,round), once txs are in the mempool
+// Enter (!CreateEmptyBlocks) : after enterNewRound(height,round)
 func (cs *State) enterPropose(height int64, round int32) {
 	logger := cs.Logger.With("height", height, "round", round)
 
@@ -1161,7 +1161,7 @@ func (cs *State) defaultDecideProposal(height int64, round int32) {
 		// If there is valid block, choose that.
 		block, blockParts = cs.ValidBlock, cs.ValidBlockParts
 	} else {
-		// Create a new proposal block from state/txs from the mempool.
+		// Create a new proposal block from state/txs.
 		var err error
 		block, err = cs.createProposalBlock()
 		if err != nil {
@@ -1754,7 +1754,7 @@ func (cs *State) finalizeCommit(height int64) {
 		return
 	}
 
-	// Execute and commit the block, update and save the state, and update the mempool.
+	// Execute and commit the block, update and save the state.
 	// NOTE The block.AppHash wont reflect these txs until the next block.
 	var (
 		err          error
