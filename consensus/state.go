@@ -2339,10 +2339,10 @@ func (cs *State) signVote(
 
 	batchStartHeight, batchStartTime := cs.getBatchStartHeight()
 	batchContext := cs.batchContext(batchStartHeight)
-	fmt.Println("========================")
-	fmt.Println(batchStartHeight)
-	fmt.Println(batchContext)
-	fmt.Println("========================")
+	// fmt.Println("========================")
+	// fmt.Println(batchStartHeight)
+	// fmt.Println(batchContext)
+	// fmt.Println("========================")
 	if cs.isBatchPoint(batchStartHeight, batchContext, batchStartTime) {
 		sig, err := blssignatures.SignMessage(
 			*cs.blsPrivKey,

@@ -26,10 +26,11 @@ func (cs *State) getBatchStartHeight() (int64, time.Time) {
 }
 
 func (cs *State) isBatchPoint(batchStartHeight int64, batchContext []byte, batchStartTime time.Time) bool {
+	// batch_blocks_interval, batch_max_bytes and batch_timeout can't be all 0
 	// block_interval || max_bytes || timeout
-	return cs.ProposalBlock.Height >= batchStartHeight+cs.config.BatchBlocksInterval-1 ||
-		len(batchContext) >= int(cs.config.BatchMaxBytes) ||
-		cs.ProposalBlock.Time.Sub(batchStartTime) >= cs.config.BatchTimeout
+	return (cs.config.BatchBlocksInterval > 0 && cs.ProposalBlock.Height >= batchStartHeight+cs.config.BatchBlocksInterval-1) ||
+		(cs.config.BatchMaxBytes > 0 && len(batchContext) >= int(cs.config.BatchMaxBytes)) ||
+		(cs.config.BatchTimeout > 0 && cs.ProposalBlock.Time.Sub(batchStartTime) >= cs.config.BatchTimeout)
 }
 
 func (cs *State) batchContext(batchStartHeight int64) []byte {

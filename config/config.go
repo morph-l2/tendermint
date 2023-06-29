@@ -994,6 +994,9 @@ func (cfg *ConsensusConfig) ValidateBasic() error {
 	if cfg.BatchTimeout < 0 {
 		return errors.New("batch_timeout can't be negative")
 	}
+	if cfg.BatchBlocksInterval <= 0 && cfg.BatchMaxBytes <= 0 && cfg.BatchTimeout <= 0 {
+		return errors.New("batch_blocks_interval, batch_max_bytes and batch_timeout can't be all 0")
+	}
 	if cfg.DoubleSignCheckHeight < 0 {
 		return errors.New("double_sign_check_height can't be negative")
 	}
