@@ -1345,18 +1345,22 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 		valid, err := cs.l2Node.CheckBlockData(l2node.ConvertTxsToBytes(cs.ProposalBlock.Data.Txs), cs.ProposalBlock.Data.L2Config, cs.ProposalBlock.Data.ZkConfig)
 		if err != nil {
 			logger.Error("check block data failed", err)
-			return
+			panic(err)
+			// return
 		}
 		if !valid {
 			logger.Error("block data is invalid")
-			return
+			panic(err)
+			// return
 		}
 	}
 
 	// Vote nil if the Application rejected the block
 	if !isAppValid {
-		logger.Error("prevote step: state machine rejected a proposed block; this should not happen:"+
-			"the proposer may be misbehaving; prevoting nil", "err", err)
+		logger.Error(
+			"prevote step: state machine rejected a proposed block; this should not happen: the proposer may be misbehaving; prevoting nil",
+			"err", err,
+		)
 		cs.signAddVote(tmproto.PrevoteType, nil, types.PartSetHeader{})
 		return
 	}

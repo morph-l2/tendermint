@@ -129,13 +129,15 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 		} else {
 			txs, l2Config, zkConfig, err = l2Node.RequestBlockData(height)
 			if err != nil {
-				return nil, err
+				// return nil, err
+				panic(err)
 			}
 		}
 	} else {
 		txs, l2Config, zkConfig, err = l2Node.RequestBlockData(height)
 		if err != nil {
-			return nil, err
+			// return nil, err
+			panic(err)
 		}
 	}
 
