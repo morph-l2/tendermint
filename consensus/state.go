@@ -1335,14 +1335,19 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 	}
 	cs.metrics.MarkProposalProcessed(isAppValid)
 
-	// TODO: only for test
+	// TODO
 	if len(cs.ProposalBlock.Data.L2Config) == 0 || len(cs.ProposalBlock.Data.ZkConfig) == 0 {
 		panic("nil config")
 	}
 
 	if cs.isValidator(cs.privValidatorPubKey.Address()) {
 		// request l2node to check whether the block data is valid
-		valid, err := cs.l2Node.CheckBlockData(l2node.ConvertTxsToBytes(cs.ProposalBlock.Data.Txs), cs.ProposalBlock.Data.L2Config, cs.ProposalBlock.Data.ZkConfig)
+		valid, err := cs.l2Node.CheckBlockData(
+			l2node.ConvertTxsToBytes(cs.ProposalBlock.Data.Txs),
+			cs.ProposalBlock.Data.L2Config,
+			cs.ProposalBlock.Data.ZkConfig,
+			cs.ProposalBlock.Data.Root,
+		)
 		if err != nil {
 			logger.Error("check block data failed", err)
 			panic(err)
@@ -1735,8 +1740,8 @@ func (cs *State) finalizeCommit(height int64) {
 	// Create a copy of the state for staging and an event cache for txs.
 	stateCopy := cs.state.Copy()
 
-	// TODO: only for test
-	if len(block.Data.L2Config) == 0 || len(block.Data.ZkConfig) == 0 {
+	// TODO
+	if len(block.Data.L2Config) == 0 || len(block.Data.ZkConfig) == 0 || len(block.Data.Root) == 0 {
 		panic("error3: nil config")
 	}
 

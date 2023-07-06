@@ -89,6 +89,7 @@ func MakeBlock(
 	txs []Tx,
 	l2Config []byte,
 	zkConfig []byte,
+	root []byte,
 	lastCommit *Commit,
 	evidence []Evidence,
 ) *Block {
@@ -101,6 +102,7 @@ func MakeBlock(
 			Txs:      txs,
 			L2Config: l2Config,
 			ZkConfig: zkConfig,
+			Root:     root,
 		},
 		Evidence:   EvidenceData{Evidence: evidence},
 		LastCommit: lastCommit,

@@ -14,6 +14,7 @@ type L2Node interface {
 		txs [][]byte,
 		l2Config []byte,
 		zkConfig []byte,
+		root []byte,
 		err error,
 	)
 
@@ -21,6 +22,7 @@ type L2Node interface {
 		txs [][]byte,
 		l2Config []byte,
 		zkConfig []byte,
+		root []byte,
 	) (
 		valid bool,
 		err error,
@@ -97,6 +99,7 @@ func (l *MockL2Node) RequestBlockData(
 	txs [][]byte,
 	l2Config []byte,
 	zkConfig []byte,
+	root []byte,
 	err error,
 ) {
 	fmt.Println("============================================================")
@@ -109,13 +112,15 @@ func (l *MockL2Node) RequestBlockData(
 	}
 	lc := randBytes(8)
 	zc := randBytes(8)
-	return rTxs, lc, zc, nil
+	rt := randBytes(8)
+	return rTxs, lc, zc, rt, nil
 }
 
 func (l MockL2Node) CheckBlockData(
 	txs [][]byte,
 	l2Config []byte,
 	zkConfig []byte,
+	root []byte,
 ) (
 	valid bool,
 	err error,
@@ -125,6 +130,7 @@ func (l MockL2Node) CheckBlockData(
 	fmt.Println(txs)
 	fmt.Println(l2Config)
 	fmt.Println(zkConfig)
+	fmt.Println(root)
 	fmt.Println("============================================================")
 	return true, nil
 }

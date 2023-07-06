@@ -9,6 +9,7 @@ type BlockData struct {
 	Txs      [][]byte
 	L2Config []byte
 	ZKConfig []byte
+	Root     []byte
 }
 
 type Notifier struct {
@@ -33,7 +34,7 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 	if createEmptyBlocksInterval == 0 {
 		go func() {
 			for {
-				txs, l2Config, zkConfig, err := n.l2Node.RequestBlockData(height)
+				txs, l2Config, zkConfig, root, err := n.l2Node.RequestBlockData(height)
 				if err != nil {
 					fmt.Println("ERROR:", err.Error())
 					return
@@ -43,6 +44,7 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 						Txs:      txs,
 						L2Config: l2Config,
 						ZKConfig: zkConfig,
+						Root:     root,
 					}
 					n.txsAvailable <- struct{}{}
 					return
@@ -58,7 +60,7 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 				case <-timeout:
 					return
 				default:
-					txs, l2Config, zkConfig, err := n.l2Node.RequestBlockData(height)
+					txs, l2Config, zkConfig, root, err := n.l2Node.RequestBlockData(height)
 					if err != nil {
 						fmt.Println("ERROR:", err.Error())
 						return
@@ -68,6 +70,7 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 							Txs:      txs,
 							L2Config: l2Config,
 							ZKConfig: zkConfig,
+							Root:     root,
 						}
 						n.txsAvailable <- struct{}{}
 						return

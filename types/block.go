@@ -1009,6 +1009,7 @@ type Data struct {
 
 	L2Config tmbytes.HexBytes
 	ZkConfig tmbytes.HexBytes
+	Root     tmbytes.HexBytes
 
 	// Volatile
 	hash tmbytes.HexBytes
@@ -1064,6 +1065,7 @@ func (data *Data) ToProto() tmproto.Data {
 	}
 	tp.L2Config = data.L2Config
 	tp.ZkConfig = data.ZkConfig
+	tp.Root = data.Root
 
 	return *tp
 }
@@ -1088,6 +1090,7 @@ func DataFromProto(dp *tmproto.Data) (Data, error) {
 
 	data.L2Config = dp.L2Config
 	data.ZkConfig = dp.ZkConfig
+	data.Root = dp.Root
 
 	return *data, nil
 }

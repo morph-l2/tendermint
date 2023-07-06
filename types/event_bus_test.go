@@ -75,7 +75,7 @@ func TestEventBusPublishEventNewBlock(t *testing.T) {
 		}
 	})
 
-	block := MakeBlock(0, []Tx{}, nil, nil, nil, []Evidence{}) // TODO
+	block := MakeBlock(0, []Tx{}, nil, nil, nil, nil, []Evidence{}) // TODO
 	resultBeginBlock := abci.ResponseBeginBlock{
 		Events: []abci.Event{
 			{Type: "testType", Attributes: []abci.EventAttribute{{Key: "baz", Value: "1"}}},
@@ -234,7 +234,7 @@ func TestEventBusPublishEventNewBlockHeader(t *testing.T) {
 		}
 	})
 
-	block := MakeBlock(0, []Tx{}, nil, nil, nil, []Evidence{}) // TODO
+	block := MakeBlock(0, []Tx{}, nil, nil, nil, nil, []Evidence{}) // TODO
 	resultBeginBlock := abci.ResponseBeginBlock{
 		Events: []abci.Event{
 			{Type: "testType", Attributes: []abci.EventAttribute{{Key: "baz", Value: "1"}}},

@@ -48,7 +48,7 @@ func (cs *State) batchContext(batchStartHeight int64) []byte {
 		txsContext = append(txsContext, tx...)
 	}
 
-	return append(zkConfigContext, txsContext...)
+	return append(append(zkConfigContext, txsContext...), cs.ProposalBlock.Data.Root...)
 }
 
 func (cs *State) batchContextHash(batchContext []byte) []byte {

@@ -90,6 +90,7 @@ message Data {
 
   bytes l2_config = 2 [(gogoproto.customname) = "L2Config"];
   bytes zk_config = 3 [(gogoproto.customname) = "ZkConfig"];
+  bytes root      = 4 [(gogoproto.customname) = "Root"];
 }
 
 // Vote represents a prevote, precommit, or commit vote from validators for

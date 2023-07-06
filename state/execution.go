@@ -120,6 +120,7 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 	var txs [][]byte
 	var l2Config []byte
 	var zkConfig []byte
+	var root []byte
 	var err error
 	if config.WaitForTxs() {
 		blockData := blockExec.notifier.GetBlockData()
@@ -127,21 +128,21 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 			txs, l2Config, zkConfig = blockData.Txs, blockData.L2Config, blockData.ZKConfig
 			blockExec.notifier.CleanBlockData()
 		} else {
-			txs, l2Config, zkConfig, err = l2Node.RequestBlockData(height)
+			txs, l2Config, zkConfig, root, err = l2Node.RequestBlockData(height)
 			if err != nil {
 				// return nil, err
 				panic(err)
 			}
 		}
 	} else {
-		txs, l2Config, zkConfig, err = l2Node.RequestBlockData(height)
+		txs, l2Config, zkConfig, root, err = l2Node.RequestBlockData(height)
 		if err != nil {
 			// return nil, err
 			panic(err)
 		}
 	}
 
-	block := state.MakeBlock(height, l2node.ConvertBytesToTxs(txs), l2Config, zkConfig, commit, evidence, proposerAddr)
+	block := state.MakeBlock(height, l2node.ConvertBytesToTxs(txs), l2Config, zkConfig, root, commit, evidence, proposerAddr)
 
 	localLastCommit := buildLastCommitInfo(block, blockExec.store, state.InitialHeight)
 	rpp, err := blockExec.proxyApp.PrepareProposalSync(
@@ -169,7 +170,7 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 		return nil, err
 	}
 
-	return state.MakeBlock(height, txl, l2Config, zkConfig, commit, evidence, proposerAddr), nil
+	return state.MakeBlock(height, txl, l2Config, zkConfig, root, commit, evidence, proposerAddr), nil
 }
 
 func (blockExec *BlockExecutor) ProcessProposal(

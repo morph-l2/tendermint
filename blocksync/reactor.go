@@ -417,7 +417,7 @@ FOR_LOOP:
 			bcR.store.SaveBlock(first, firstParts, second.LastCommit)
 
 			// TODO: only for test
-			if len(first.Data.L2Config) == 0 || len(first.Data.ZkConfig) == 0 {
+			if len(first.Data.L2Config) == 0 || len(first.Data.ZkConfig) == 0 || len(first.Data.Root) == 0 {
 				panic("error1: nil config")
 			}
 			if len(l2node.GetValidators(second.LastCommit)) == 0 || len(l2node.GetBLSSignatures(second.LastCommit)) == 0 {
