@@ -1336,7 +1336,7 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 	cs.metrics.MarkProposalProcessed(isAppValid)
 
 	// TODO
-	if len(cs.ProposalBlock.Data.L2Config) == 0 || len(cs.ProposalBlock.Data.ZkConfig) == 0 {
+	if len(cs.ProposalBlock.Data.L2Config) == 0 || len(cs.ProposalBlock.Data.ZkConfig) == 0 || len(cs.ProposalBlock.Data.Root) == 0 {
 		panic("nil config")
 	}
 

@@ -111,7 +111,7 @@ func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
 
 	return NewNode(
 		config,
-		l2node.NewMockL2Node(0),
+		l2node.NewMockL2Node(1),
 		privval.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile()),
 		&blsPrivKey,
 		nodeKey,
