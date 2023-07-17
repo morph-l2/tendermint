@@ -164,8 +164,12 @@ func CustomReactors(reactors map[string]p2p.Reactor) Option {
 	return func(n *Node) {
 		for name, reactor := range reactors {
 			if existingReactor := n.sw.Reactor(name); existingReactor != nil {
-				n.sw.Logger.Info("Replacing existing reactor with a custom one",
-					"name", name, "existing", existingReactor, "custom", reactor)
+				n.sw.Logger.Info(
+					"Replacing existing reactor with a custom one",
+					"name", name,
+					"existing", existingReactor,
+					"custom", reactor,
+				)
 				n.sw.RemoveReactor(name, existingReactor)
 			}
 			n.sw.AddReactor(name, reactor)
@@ -255,7 +259,14 @@ func initDBs(config *cfg.Config, dbProvider DBProvider) (blockStore *store.Block
 	return
 }
 
-func createAndStartProxyAppConns(clientCreator proxy.ClientCreator, logger log.Logger, metrics *proxy.Metrics) (proxy.AppConns, error) {
+func createAndStartProxyAppConns(
+	clientCreator proxy.ClientCreator,
+	logger log.Logger,
+	metrics *proxy.Metrics,
+) (
+	proxy.AppConns,
+	error,
+) {
 	proxyApp := proxy.NewAppConns(clientCreator, metrics)
 	proxyApp.SetLogger(logger.With("module", "proxy"))
 	if err := proxyApp.Start(); err != nil {
@@ -279,7 +290,12 @@ func createAndStartIndexerService(
 	dbProvider DBProvider,
 	eventBus *types.EventBus,
 	logger log.Logger,
-) (*txindex.IndexerService, txindex.TxIndexer, indexer.BlockIndexer, error) {
+) (
+	*txindex.IndexerService,
+	txindex.TxIndexer,
+	indexer.BlockIndexer,
+	error,
+) {
 	var (
 		txIndexer    txindex.TxIndexer
 		blockIndexer indexer.BlockIndexer
@@ -341,7 +357,8 @@ func doHandshake(
 
 func logNodeStartupInfo(state sm.State, pubKey crypto.PubKey, logger, consensusLogger log.Logger) {
 	// Log the version info.
-	logger.Info("Version info",
+	logger.Info(
+		"Version info",
 		"tendermint_version", version.TMCoreSemVer,
 		"block", version.BlockProtocol,
 		"p2p", version.P2PProtocol,
@@ -349,7 +366,8 @@ func logNodeStartupInfo(state sm.State, pubKey crypto.PubKey, logger, consensusL
 
 	// If the state and software differ in block version, at least log it.
 	if state.Version.Consensus.Block != version.BlockProtocol {
-		logger.Info("Software and state have different block protocols",
+		logger.Info(
+			"Software and state have different block protocols",
 			"software", version.BlockProtocol,
 			"state", state.Version.Consensus.Block,
 		)
@@ -372,17 +390,30 @@ func onlyValidatorIsUs(state sm.State, pubKey crypto.PubKey) bool {
 	return bytes.Equal(pubKey.Address(), addr)
 }
 
-func createEvidenceReactor(config *cfg.Config, dbProvider DBProvider,
-	stateDB dbm.DB, blockStore *store.BlockStore, logger log.Logger,
-) (*evidence.Reactor, *evidence.Pool, error) {
+func createEvidenceReactor(
+	config *cfg.Config,
+	dbProvider DBProvider,
+	stateDB dbm.DB,
+	blockStore *store.BlockStore,
+	logger log.Logger,
+) (
+	*evidence.Reactor,
+	*evidence.Pool,
+	error,
+) {
 	evidenceDB, err := dbProvider(&DBContext{"evidence", config})
 	if err != nil {
 		return nil, nil, err
 	}
 	evidenceLogger := logger.With("module", "evidence")
-	evidencePool, err := evidence.NewPool(evidenceDB, sm.NewStore(stateDB, sm.StoreOptions{
-		DiscardABCIResponses: config.Storage.DiscardABCIResponses,
-	}), blockStore)
+	evidencePool, err := evidence.NewPool(
+		evidenceDB,
+		sm.NewStore(
+			stateDB,
+			sm.StoreOptions{DiscardABCIResponses: config.Storage.DiscardABCIResponses},
+		),
+		blockStore,
+	)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -399,7 +430,10 @@ func createBlockchainReactor(
 	blockStore *store.BlockStore,
 	blockSync bool,
 	logger log.Logger,
-) (bcReactor p2p.Reactor, err error) {
+) (
+	bcReactor p2p.Reactor,
+	err error,
+) {
 	switch config.BlockSync.Version {
 	case "v0":
 		bcReactor = bc.NewReactor(l2Node, state.Copy(), blockExec, blockStore, blockSync)
@@ -427,7 +461,10 @@ func createConsensusReactor(
 	waitSync bool,
 	eventBus *types.EventBus,
 	consensusLogger log.Logger,
-) (*cs.Reactor, *cs.State) {
+) (
+	*cs.Reactor,
+	*cs.State,
+) {
 	consensusState := cs.NewState(
 		l2Node,
 		config.Consensus,
@@ -480,9 +517,9 @@ func createTransport(
 			connFilters,
 			// ABCI query for address filtering.
 			func(_ p2p.ConnSet, c net.Conn, _ []net.IP) error {
-				res, err := proxyApp.Query().QuerySync(abci.RequestQuery{
-					Path: fmt.Sprintf("/p2p/filter/addr/%s", c.RemoteAddr().String()),
-				})
+				res, err := proxyApp.Query().QuerySync(
+					abci.RequestQuery{Path: fmt.Sprintf("/p2p/filter/addr/%s", c.RemoteAddr().String())},
+				)
 				if err != nil {
 					return err
 				}
@@ -498,9 +535,9 @@ func createTransport(
 			peerFilters,
 			// ABCI query for ID filtering.
 			func(_ p2p.IPeerSet, p p2p.Peer) error {
-				res, err := proxyApp.Query().QuerySync(abci.RequestQuery{
-					Path: fmt.Sprintf("/p2p/filter/id/%s", p.ID()),
-				})
+				res, err := proxyApp.Query().QuerySync(
+					abci.RequestQuery{Path: fmt.Sprintf("/p2p/filter/id/%s", p.ID())},
+				)
 				if err != nil {
 					return err
 				}
@@ -522,7 +559,8 @@ func createTransport(
 	return transport, peerFilters
 }
 
-func createSwitch(config *cfg.Config,
+func createSwitch(
+	config *cfg.Config,
 	transport p2p.Transport,
 	p2pMetrics *p2p.Metrics,
 	peerFilters []p2p.PeerFilterFunc,
@@ -553,9 +591,14 @@ func createSwitch(config *cfg.Config,
 	return sw
 }
 
-func createAddrBookAndSetOnSwitch(config *cfg.Config, sw *p2p.Switch,
-	p2pLogger log.Logger, nodeKey *p2p.NodeKey,
-) (pex.AddrBook, error) {
+func createAddrBookAndSetOnSwitch(
+	config *cfg.Config,
+	sw *p2p.Switch,
+	p2pLogger log.Logger,
+	nodeKey *p2p.NodeKey,
+) (
+	pex.AddrBook, error,
+) {
 	addrBook := pex.NewAddrBook(config.P2P.AddrBookFile(), config.P2P.AddrBookStrict)
 	addrBook.SetLogger(p2pLogger.With("book", config.P2P.AddrBookFile()))
 
@@ -580,8 +623,11 @@ func createAddrBookAndSetOnSwitch(config *cfg.Config, sw *p2p.Switch,
 	return addrBook, nil
 }
 
-func createPEXReactorAndAddToSwitch(addrBook pex.AddrBook, config *cfg.Config,
-	sw *p2p.Switch, logger log.Logger,
+func createPEXReactorAndAddToSwitch(
+	addrBook pex.AddrBook,
+	config *cfg.Config,
+	sw *p2p.Switch,
+	logger log.Logger,
 ) *pex.Reactor {
 	// TODO persistent peers ? so we can have their DNS addrs saved
 	pexReactor := pex.NewReactor(addrBook,
@@ -621,12 +667,17 @@ func startStateSync(
 		defer cancel()
 		stateProvider, err = statesync.NewLightClientStateProvider(
 			ctx,
-			state.ChainID, state.Version, state.InitialHeight,
-			config.RPCServers, light.TrustOptions{
+			state.ChainID,
+			state.Version,
+			state.InitialHeight,
+			config.RPCServers,
+			light.TrustOptions{
 				Period: config.TrustPeriod,
 				Height: config.TrustHeight,
 				Hash:   config.TrustHashBytes(),
-			}, ssR.Logger.With("module", "light"))
+			},
+			ssR.Logger.With("module", "light"),
+		)
 		if err != nil {
 			return fmt.Errorf("failed to set up light client state provider: %w", err)
 		}
@@ -638,13 +689,11 @@ func startStateSync(
 			ssR.Logger.Error("State sync failed", "err", err)
 			return
 		}
-		err = stateStore.Bootstrap(state)
-		if err != nil {
+		if err = stateStore.Bootstrap(state); err != nil {
 			ssR.Logger.Error("Failed to bootstrap node with new state", "err", err)
 			return
 		}
-		err = blockStore.SaveSeenCommit(state.LastBlockHeight, commit)
-		if err != nil {
+		if err = blockStore.SaveSeenCommit(state.LastBlockHeight, commit); err != nil {
 			ssR.Logger.Error("Failed to store last seen commit", "err", err)
 			return
 		}
@@ -653,8 +702,7 @@ func startStateSync(
 			// FIXME Very ugly to have these metrics bleed through here.
 			conR.Metrics.StateSyncing.Set(0)
 			conR.Metrics.BlockSyncing.Set(1)
-			err = bcR.SwitchToBlockSync(state)
-			if err != nil {
+			if err = bcR.SwitchToBlockSync(state); err != nil {
 				ssR.Logger.Error("Failed to switch to block sync", "err", err)
 				return
 			}
@@ -678,15 +726,18 @@ func NewNode(
 	metricsProvider MetricsProvider,
 	logger log.Logger,
 	options ...Option,
-) (*Node, error) {
+) (
+	*Node, error,
+) {
 	blockStore, stateDB, err := initDBs(config, dbProvider)
 	if err != nil {
 		return nil, err
 	}
 
-	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
-		DiscardABCIResponses: config.Storage.DiscardABCIResponses,
-	})
+	stateStore := sm.NewStore(
+		stateDB,
+		sm.StoreOptions{DiscardABCIResponses: config.Storage.DiscardABCIResponses},
+	)
 
 	state, genDoc, err := LoadStateFromDBOrGenesisDocProvider(stateDB, genesisDocProvider)
 	if err != nil {
@@ -710,8 +761,7 @@ func NewNode(
 		return nil, err
 	}
 
-	indexerService, txIndexer, blockIndexer, err := createAndStartIndexerService(config,
-		genDoc.ChainID, dbProvider, eventBus, logger)
+	indexerService, txIndexer, blockIndexer, err := createAndStartIndexerService(config, genDoc.ChainID, dbProvider, eventBus, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -825,13 +875,11 @@ func NewNode(
 		consensusReactor, evidenceReactor, nodeInfo, nodeKey, p2pLogger,
 	)
 
-	err = sw.AddPersistentPeers(splitAndTrimEmpty(config.P2P.PersistentPeers, ",", " "))
-	if err != nil {
+	if err = sw.AddPersistentPeers(splitAndTrimEmpty(config.P2P.PersistentPeers, ",", " ")); err != nil {
 		return nil, fmt.Errorf("could not add peers from persistent_peers field: %w", err)
 	}
 
-	err = sw.AddUnconditionalPeerIDs(splitAndTrimEmpty(config.P2P.UnconditionalPeerIDs, ",", " "))
-	if err != nil {
+	if err = sw.AddUnconditionalPeerIDs(splitAndTrimEmpty(config.P2P.UnconditionalPeerIDs, ",", " ")); err != nil {
 		return nil, fmt.Errorf("could not add peer ids from unconditional_peer_ids field: %w", err)
 	}
 
@@ -899,6 +947,42 @@ func NewNode(
 		option(node)
 	}
 
+	csHeight := node.ConsensusState().Height
+	h, err := node.ConsensusState().GetL2Node().RequestHeight(csHeight)
+	if err != nil {
+		panic(err)
+	}
+
+	if h > csHeight {
+		panic("l2node block number is greater than tm")
+	}
+
+	if h < csHeight {
+		for i := csHeight + 1; i < csHeight; i++ {
+			block := blockStore.LoadBlock(i)
+			blockNext := blockStore.LoadBlock(i + 1)
+			if err := node.ConsensusState().GetL2Node().DeliverBlock(
+				l2node.ConvertTxsToBytes(block.Data.Txs),
+				block.Data.L2Config,
+				block.Data.ZkConfig,
+				l2node.GetValidators(blockNext.LastCommit),
+				l2node.GetBLSSignatures(blockNext.LastCommit),
+			); err != nil {
+				panic(err)
+			}
+		}
+		block := blockStore.LoadBlock(csHeight)
+		if err := node.ConsensusState().GetL2Node().DeliverBlock(
+			l2node.ConvertTxsToBytes(block.Data.Txs),
+			block.Data.L2Config,
+			block.Data.ZkConfig,
+			l2node.GetValidators(blockStore.LoadSeenCommit(csHeight)),
+			l2node.GetBLSSignatures(blockStore.LoadSeenCommit(csHeight)),
+		); err != nil {
+			panic(err)
+		}
+	}
+
 	return node, nil
 }
 
@@ -941,14 +1025,12 @@ func (n *Node) OnStart() error {
 	n.isListening = true
 
 	// Start the switch (the P2P server).
-	err = n.sw.Start()
-	if err != nil {
+	if err = n.sw.Start(); err != nil {
 		return err
 	}
 
 	// Always connect to persistent peers
-	err = n.sw.DialPeersAsync(splitAndTrimEmpty(n.config.P2P.PersistentPeers, ",", " "))
-	if err != nil {
+	if err = n.sw.DialPeersAsync(splitAndTrimEmpty(n.config.P2P.PersistentPeers, ",", " ")); err != nil {
 		return fmt.Errorf("could not dial peers from persistent_peers field: %w", err)
 	}
 
@@ -958,7 +1040,7 @@ func (n *Node) OnStart() error {
 		if !ok {
 			return fmt.Errorf("this blockchain reactor does not support switching from state sync")
 		}
-		err := startStateSync(
+		if err := startStateSync(
 			n.stateSyncReactor,
 			bcR, n.consensusReactor,
 			n.stateSyncProvider,
@@ -967,8 +1049,7 @@ func (n *Node) OnStart() error {
 			n.stateStore,
 			n.blockStore,
 			n.stateSyncGenesis,
-		)
-		if err != nil {
+		); err != nil {
 			return fmt.Errorf("failed to start state sync: %w", err)
 		}
 	}
@@ -1040,7 +1121,7 @@ func (n *Node) ConfigureRPC() error {
 		return fmt.Errorf("can't get pubkey: %w", err)
 	}
 	rpccore.SetEnvironment(&rpccore.Environment{
-		ProxyAppQuery:   n.proxyApp.Query(),
+		ProxyAppQuery: n.proxyApp.Query(),
 
 		StateStore:     n.stateStore,
 		BlockStore:     n.blockStore,
@@ -1068,8 +1149,7 @@ func (n *Node) ConfigureRPC() error {
 }
 
 func (n *Node) startRPC() ([]net.Listener, error) {
-	err := n.ConfigureRPC()
-	if err != nil {
+	if err := n.ConfigureRPC(); err != nil {
 		return nil, err
 	}
 
@@ -1191,7 +1271,8 @@ func (n *Node) startPrometheusServer(addr string) *http.Server {
 	srv := &http.Server{
 		Addr: addr,
 		Handler: promhttp.InstrumentMetricHandler(
-			prometheus.DefaultRegisterer, promhttp.HandlerFor(
+			prometheus.DefaultRegisterer,
+			promhttp.HandlerFor(
 				prometheus.DefaultGatherer,
 				promhttp.HandlerOpts{MaxRequestsInFlight: n.config.Instrumentation.MaxOpenConnections},
 			),
@@ -1286,7 +1367,10 @@ func makeNodeInfo(
 	txIndexer txindex.TxIndexer,
 	genDoc *types.GenesisDoc,
 	state sm.State,
-) (p2p.DefaultNodeInfo, error) {
+) (
+	p2p.DefaultNodeInfo,
+	error,
+) {
 	txIndexerStatus := "on"
 	if _, ok := txIndexer.(*null.TxIndex); ok {
 		txIndexerStatus = "off"
@@ -1303,9 +1387,13 @@ func makeNodeInfo(
 		Version:       version.TMCoreSemVer,
 		Channels: []byte{
 			bc.BlocksyncChannel,
-			cs.StateChannel, cs.DataChannel, cs.VoteChannel, cs.VoteSetBitsChannel,
+			cs.StateChannel,
+			cs.DataChannel,
+			cs.VoteChannel,
+			cs.VoteSetBitsChannel,
 			evidence.EvidenceChannel,
-			statesync.SnapshotChannel, statesync.ChunkChannel,
+			statesync.SnapshotChannel,
+			statesync.ChunkChannel,
 		},
 		Moniker: config.Moniker,
 		Other: p2p.DefaultNodeInfoOther{
@@ -1326,8 +1414,7 @@ func makeNodeInfo(
 
 	nodeInfo.ListenAddr = lAddr
 
-	err := nodeInfo.Validate()
-	return nodeInfo, err
+	return nodeInfo, nodeInfo.Validate()
 }
 
 //------------------------------------------------------------------------------
@@ -1340,7 +1427,11 @@ var genesisDocKey = []byte("genesisDoc")
 func LoadStateFromDBOrGenesisDocProvider(
 	stateDB dbm.DB,
 	genesisDocProvider GenesisDocProvider,
-) (sm.State, *types.GenesisDoc, error) {
+) (
+	sm.State,
+	*types.GenesisDoc,
+	error,
+) {
 	// Get genesis doc
 	genDoc, err := loadGenesisDoc(stateDB)
 	if err != nil {
@@ -1354,9 +1445,10 @@ func LoadStateFromDBOrGenesisDocProvider(
 			return sm.State{}, nil, err
 		}
 	}
-	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
-		DiscardABCIResponses: false,
-	})
+	stateStore := sm.NewStore(
+		stateDB,
+		sm.StoreOptions{DiscardABCIResponses: false},
+	)
 	state, err := stateStore.LoadFromDBOrGenesisDoc(genDoc)
 	if err != nil {
 		return sm.State{}, nil, err
@@ -1398,7 +1490,10 @@ func createAndStartPrivValidatorSocketClient(
 	listenAddr,
 	chainID string,
 	logger log.Logger,
-) (types.PrivValidator, error) {
+) (
+	types.PrivValidator,
+	error,
+) {
 	pve, err := privval.NewSignerListener(listenAddr, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start private validator: %w", err)
@@ -1410,8 +1505,7 @@ func createAndStartPrivValidatorSocketClient(
 	}
 
 	// try to get a pubkey from private validate first time
-	_, err = pvsc.GetPubKey()
-	if err != nil {
+	if _, err = pvsc.GetPubKey(); err != nil {
 		return nil, fmt.Errorf("can't get pubkey: %w", err)
 	}
 

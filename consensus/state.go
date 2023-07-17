@@ -201,6 +201,11 @@ func NewState(
 	return cs
 }
 
+// GetL2Node returns l2Node
+func (cs *State) GetL2Node() l2node.L2Node {
+	return cs.l2Node
+}
+
 // SetLogger implements Service.
 func (cs *State) SetLogger(l log.Logger) {
 	cs.BaseService.Logger = l
@@ -2347,12 +2352,18 @@ func (cs *State) signVote(
 	}
 
 	batchStartHeight, batchStartTime := cs.getBatchStartHeight()
-	batchContext := cs.batchContext(batchStartHeight)
-	// fmt.Println("========================")
-	// fmt.Println(batchStartHeight)
-	// fmt.Println(batchContext)
-	// fmt.Println("========================")
-	if cs.isBatchPoint(batchStartHeight, batchContext, batchStartTime) {
+	zkConfigContext, rawBatchTxs, root := cs.batchData(batchStartHeight)
+
+	if cs.isBatchPoint(
+		batchStartHeight,
+		len(zkConfigContext)+tsxSize(rawBatchTxs)+len(root),
+		batchStartTime,
+	) {
+		encodedTxs, err := cs.l2Node.EncodeTxs(rawBatchTxs)
+		if err != nil {
+			panic(err)
+		}
+		batchContext := cs.batchContext(zkConfigContext, encodedTxs, root)
 		sig, err := blssignatures.SignMessage(
 			*cs.blsPrivKey,
 			cs.batchContextHash(batchContext),
@@ -2361,6 +2372,12 @@ func (cs *State) signVote(
 			return nil, err
 		}
 		vote.BLSSignature = blssignatures.SignatureToBytes(sig)
+
+		fmt.Println("========================")
+		fmt.Println("BatchContext")
+		fmt.Println(batchStartHeight)
+		fmt.Println(batchContext)
+		fmt.Println("========================")
 	}
 
 	return vote, nil
