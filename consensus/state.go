@@ -1347,6 +1347,10 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 
 	if cs.isValidator(cs.privValidatorPubKey.Address()) {
 		// request l2node to check whether the block data is valid
+		fmt.Println("============================================================")
+		fmt.Println("CheckBlockData")
+		fmt.Println(cs.Height)
+		fmt.Println("============================================================")
 		valid, err := cs.l2Node.CheckBlockData(
 			l2node.ConvertTxsToBytes(cs.ProposalBlock.Data.Txs),
 			cs.ProposalBlock.Data.L2Config,

@@ -31,7 +31,7 @@ func (l *MockL2Node) RequestHeight(
 ) {
 	height = tmHeight
 	if tmHeight > 10 {
-		height = tmHeight - 5
+		height = tmHeight - 2
 	}
 	fmt.Println("============================================================")
 	fmt.Println("RequestHeight")
@@ -62,16 +62,20 @@ func (l *MockL2Node) RequestBlockData(
 	root []byte,
 	err error,
 ) {
-	fmt.Println("============================================================")
-	fmt.Println("RequestBlockData")
-	fmt.Println(height)
-	fmt.Println("============================================================")
 	for i := int(0); i < l.txNumber; i++ {
 		txs = append(txs, randBytes(10))
 	}
 	l2Config = randBytes(8)
 	zkConfig = randBytes(8)
 	root = randBytes(8)
+	fmt.Println("============================================================")
+	fmt.Println("RequestBlockData")
+	fmt.Println(height)
+	fmt.Println(txs)
+	fmt.Println(l2Config)
+	fmt.Println(zkConfig)
+	fmt.Println(root)
+	fmt.Println("============================================================")
 	return
 }
 
