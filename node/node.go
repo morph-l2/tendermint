@@ -111,7 +111,7 @@ func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
 
 	return NewNode(
 		config,
-		l2node.NewMockL2Node(1),
+		l2node.NewMockL2Node(0),
 		privval.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile()),
 		&blsPrivKey,
 		nodeKey,
@@ -958,7 +958,7 @@ func NewNode(
 	}
 
 	if h < csHeight {
-		for i := csHeight + 1; i < csHeight; i++ {
+		for i := h + 1; i < csHeight; i++ {
 			block := blockStore.LoadBlock(i)
 			blockNext := blockStore.LoadBlock(i + 1)
 			if err := node.ConsensusState().GetL2Node().DeliverBlock(
