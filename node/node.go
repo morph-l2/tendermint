@@ -3,6 +3,7 @@ package node
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -952,6 +953,11 @@ func NewNode(
 	if err != nil {
 		panic(err)
 	}
+	fmt.Println("============================================================")
+	fmt.Println("RequestHeight")
+	fmt.Println(csHeight)
+	fmt.Println(h)
+	fmt.Println("============================================================")
 
 	if h > csHeight+1 {
 		panic("l2node block number is greater than tm")
@@ -964,6 +970,9 @@ func NewNode(
 			fmt.Println("============================================================")
 			fmt.Println("Sync")
 			fmt.Println(i)
+			fmt.Println("DeliverBlock")
+			fmt.Println(hex.EncodeToString(block.Data.L2Config))
+			fmt.Println(hex.EncodeToString(block.Data.ZkConfig))
 			fmt.Println("============================================================")
 			if err := node.ConsensusState().GetL2Node().DeliverBlock(
 				l2node.ConvertTxsToBytes(block.Data.Txs),
@@ -979,6 +988,9 @@ func NewNode(
 		fmt.Println("============================================================")
 		fmt.Println("Sync")
 		fmt.Println(csHeight)
+		fmt.Println("DeliverBlock")
+		fmt.Println(hex.EncodeToString(block.Data.L2Config))
+		fmt.Println(hex.EncodeToString(block.Data.ZkConfig))
 		fmt.Println("============================================================")
 		if err := node.ConsensusState().GetL2Node().DeliverBlock(
 			l2node.ConvertTxsToBytes(block.Data.Txs),
