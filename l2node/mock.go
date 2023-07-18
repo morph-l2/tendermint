@@ -29,12 +29,16 @@ func (l *MockL2Node) RequestHeight(
 	height int64,
 	err error,
 ) {
+	height = tmHeight
+	if tmHeight > 10 {
+		height = tmHeight - 5
+	}
 	fmt.Println("============================================================")
 	fmt.Println("RequestHeight")
 	fmt.Println(tmHeight)
 	fmt.Println(height)
 	fmt.Println("============================================================")
-	return tmHeight, nil
+	return
 }
 
 func (l *MockL2Node) EncodeTxs(
@@ -62,14 +66,13 @@ func (l *MockL2Node) RequestBlockData(
 	fmt.Println("RequestBlockData")
 	fmt.Println(height)
 	fmt.Println("============================================================")
-	var rTxs [][]byte
 	for i := int(0); i < l.txNumber; i++ {
-		rTxs = append(rTxs, randBytes(10))
+		txs = append(txs, randBytes(10))
 	}
-	lc := randBytes(8)
-	zc := randBytes(8)
-	rt := randBytes(8)
-	return rTxs, lc, zc, rt, nil
+	l2Config = randBytes(8)
+	zkConfig = randBytes(8)
+	root = randBytes(8)
+	return
 }
 
 func (l MockL2Node) CheckBlockData(
@@ -81,6 +84,7 @@ func (l MockL2Node) CheckBlockData(
 	valid bool,
 	err error,
 ) {
+	valid = true
 	fmt.Println("============================================================")
 	fmt.Println("CheckBlockData")
 	fmt.Println(txs)
@@ -88,7 +92,7 @@ func (l MockL2Node) CheckBlockData(
 	fmt.Println(zkConfig)
 	fmt.Println(root)
 	fmt.Println("============================================================")
-	return true, nil
+	return
 }
 
 func (l MockL2Node) DeliverBlock(
@@ -108,7 +112,7 @@ func (l MockL2Node) DeliverBlock(
 	fmt.Println(validators)
 	fmt.Println(blsSignatures)
 	fmt.Println("============================================================")
-	return nil
+	return
 }
 
 func randBytes(n int) []byte {

@@ -947,13 +947,13 @@ func NewNode(
 		option(node)
 	}
 
-	csHeight := node.ConsensusState().Height
+	csHeight := node.ConsensusState().Height - 1
 	h, err := node.ConsensusState().GetL2Node().RequestHeight(csHeight)
 	if err != nil {
 		panic(err)
 	}
 
-	if h > csHeight {
+	if h > csHeight+1 {
 		panic("l2node block number is greater than tm")
 	}
 
@@ -961,6 +961,10 @@ func NewNode(
 		for i := h + 1; i < csHeight; i++ {
 			block := blockStore.LoadBlock(i)
 			blockNext := blockStore.LoadBlock(i + 1)
+			fmt.Println("============================================================")
+			fmt.Println("Sync")
+			fmt.Println(i)
+			fmt.Println("============================================================")
 			if err := node.ConsensusState().GetL2Node().DeliverBlock(
 				l2node.ConvertTxsToBytes(block.Data.Txs),
 				block.Data.L2Config,
@@ -972,6 +976,10 @@ func NewNode(
 			}
 		}
 		block := blockStore.LoadBlock(csHeight)
+		fmt.Println("============================================================")
+		fmt.Println("Sync")
+		fmt.Println(csHeight)
+		fmt.Println("============================================================")
 		if err := node.ConsensusState().GetL2Node().DeliverBlock(
 			l2node.ConvertTxsToBytes(block.Data.Txs),
 			block.Data.L2Config,
