@@ -1355,7 +1355,6 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 		fmt.Println(hex.EncodeToString(cs.ProposalBlock.Data.ZkConfig))
 		fmt.Println(hex.EncodeToString(cs.ProposalBlock.Data.Root))
 		fmt.Println("============================================================")
-		fmt.Println("============================================================")
 		valid, err := cs.l2Node.CheckBlockData(
 			l2node.ConvertTxsToBytes(cs.ProposalBlock.Data.Txs),
 			cs.ProposalBlock.Data.L2Config,
@@ -1368,9 +1367,8 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 			// return
 		}
 		if !valid {
-			logger.Error("block data is invalid")
-			panic(err)
-			// return
+			logger.Error("block data is not accepted; the proposer may be misbehaving; prevoting nil", "err", err)
+			cs.signAddVote(tmproto.PrevoteType, nil, types.PartSetHeader{})
 		}
 	}
 
@@ -2390,7 +2388,7 @@ func (cs *State) signVote(
 		fmt.Println("========================")
 		fmt.Println("BatchContext")
 		fmt.Println(batchStartHeight)
-		fmt.Println(batchContext)
+		fmt.Println(hex.EncodeToString(batchContext))
 		fmt.Println("========================")
 	}
 

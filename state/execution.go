@@ -81,10 +81,6 @@ func (blockExec *BlockExecutor) RequestBlockData(height int64, createEmptyBlocks
 	blockExec.notifier.RequestBlockData(height, createEmptyBlocksInterval)
 }
 
-func (blockExec *BlockExecutor) GetBlockData() *l2node.BlockData {
-	return blockExec.notifier.GetBlockData()
-}
-
 func (blockExec *BlockExecutor) Store() Store {
 	return blockExec.store
 }
