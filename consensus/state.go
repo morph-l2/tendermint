@@ -2363,7 +2363,7 @@ func (cs *State) signVote(
 		return vote, nil
 	}
 
-	batchStartHeight, batchStartTime := cs.getBatchStartHeight()
+	batchStartHeight, batchStartTime := cs.getBatchStart()
 	zkConfigContext, rawBatchTxs, root := cs.batchData(batchStartHeight)
 
 	if cs.isBatchPoint(

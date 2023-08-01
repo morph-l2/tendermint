@@ -1,7 +1,6 @@
 package consensus
 
 import (
-	"fmt"
 	"time"
 
 	ethcrypto "github.com/scroll-tech/go-ethereum/crypto"
@@ -9,18 +8,19 @@ import (
 )
 
 // currentHeight should be greater than InitialHeight
-func (cs *State) getBatchStartHeight() (int64, time.Time) {
+func (cs *State) getBatchStart() (int64, time.Time) {
+	prHeight := cs.ProposalBlock.LastCommit.Height
 	if checkBLS(cs.ProposalBlock.LastCommit.Signatures) {
-		return cs.ProposalBlock.Height, cs.ProposalBlock.Time
+		return prHeight, cs.blockStore.LoadBlock(prHeight).Time
 	}
-	for i := cs.ProposalBlock.Height - 1; ; i-- {
+	for i := prHeight; ; i-- {
 		if i == cs.state.InitialHeight {
 			return i, cs.blockStore.LoadBlock(i).Time
 		}
 		block := cs.blockStore.LoadBlock(i)
 		if checkBLS(block.LastCommit.Signatures) {
-			fmt.Println(block.Time)
-			return block.Height, block.Time
+			preBlock := cs.blockStore.LoadBlock(i - 1)
+			return preBlock.Height, preBlock.Time
 		}
 	}
 }
@@ -28,24 +28,20 @@ func (cs *State) getBatchStartHeight() (int64, time.Time) {
 func (cs *State) isBatchPoint(batchStartHeight int64, batchSize int, batchStartTime time.Time) bool {
 	// batch_blocks_interval, batch_max_bytes and batch_timeout can't be all 0
 	// block_interval || max_bytes || timeout
-	return (cs.config.BatchBlocksInterval > 0 && cs.ProposalBlock.Height >= batchStartHeight+cs.config.BatchBlocksInterval-1) ||
+	return (cs.config.BatchBlocksInterval > 0 && cs.ProposalBlock.Height-batchStartHeight >= cs.config.BatchBlocksInterval) ||
 		(cs.config.BatchMaxBytes > 0 && batchSize >= int(cs.config.BatchMaxBytes)) ||
 		(cs.config.BatchTimeout > 0 && cs.ProposalBlock.Time.Sub(batchStartTime) >= cs.config.BatchTimeout)
 }
 
 func (cs *State) batchData(batchStartHeight int64) (zkConfigContext []byte, rawBatchTxs [][]byte, root []byte) {
-	for i := batchStartHeight; i < cs.ProposalBlock.Height; i++ {
-		block := cs.blockStore.LoadBlock(batchStartHeight)
+	for i := batchStartHeight; i < cs.ProposalBlock.Height-1; i++ {
+		block := cs.blockStore.LoadBlock(i)
 		zkConfigContext = append(zkConfigContext, block.Data.ZkConfig...)
 		for _, tx := range block.Data.Txs {
 			rawBatchTxs = append(rawBatchTxs, tx)
 		}
 	}
-	zkConfigContext = append(zkConfigContext, cs.ProposalBlock.Data.ZkConfig...)
-	for _, tx := range cs.ProposalBlock.Data.Txs {
-		rawBatchTxs = append(rawBatchTxs, tx)
-	}
-	root = cs.ProposalBlock.Data.Root
+	root = cs.blockStore.LoadBlock(cs.ProposalBlock.Height - 1).Data.Root
 	return
 }
 
