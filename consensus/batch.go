@@ -34,7 +34,7 @@ func (cs *State) isBatchPoint(batchStartHeight int64, batchSize int, batchStartT
 }
 
 func (cs *State) batchData(batchStartHeight int64) (zkConfigContext []byte, rawBatchTxs [][]byte, root []byte) {
-	for i := batchStartHeight; i < cs.ProposalBlock.Height-1; i++ {
+	for i := batchStartHeight; i < cs.ProposalBlock.Height; i++ {
 		block := cs.blockStore.LoadBlock(i)
 		zkConfigContext = append(zkConfigContext, block.Data.ZkConfig...)
 		for _, tx := range block.Data.Txs {
@@ -51,6 +51,13 @@ func (cs *State) batchContext(zkConfigContext []byte, encodedTxs []byte, root []
 
 func (cs *State) batchContextHash(batchContext []byte) []byte {
 	return ethcrypto.Keccak256(batchContext)
+}
+
+func (cs *State) proposalBlockRawTxs() (rawTxs [][]byte) {
+	for _, tx := range cs.ProposalBlock.Data.Txs {
+		rawTxs = append(rawTxs, tx)
+	}
+	return
 }
 
 func checkBLS(signatures []types.CommitSig) bool {
