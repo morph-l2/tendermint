@@ -2365,7 +2365,7 @@ func (cs *State) signVote(
 
 	batchStartHeight, batchStartTime := cs.getBatchStart()
 	zkConfigContext, rawBatchTxs, root := cs.batchData(batchStartHeight)
-	batchSizeWithProposalBlock := len(zkConfigContext) + tsxSize(rawBatchTxs) + len(cs.ProposalBlock.Data.ZkConfig) + tsxSize(cs.proposalBlockRawTxs()) + len(cs.ProposalBlock.Data.Root)
+	batchSizeWithProposalBlock := len(zkConfigContext) + txsSize(rawBatchTxs) + len(cs.ProposalBlock.Data.ZkConfig) + txsSize(cs.proposalBlockRawTxs()) + len(cs.ProposalBlock.Data.Root)
 	if cs.isBatchPoint(
 		batchStartHeight,
 		batchSizeWithProposalBlock,

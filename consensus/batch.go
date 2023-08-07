@@ -69,7 +69,7 @@ func checkBLS(signatures []types.CommitSig) bool {
 	return false
 }
 
-func tsxSize(batchTxs [][]byte) int {
+func txsSize(batchTxs [][]byte) int {
 	sum := 0
 	for _, tx := range batchTxs {
 		sum += len(tx)
