@@ -2,7 +2,6 @@ package consensus
 
 import (
 	"bytes"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -1348,13 +1347,13 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 
 	if cs.isValidator(cs.privValidatorPubKey.Address()) {
 		// request l2node to check whether the block data is valid
-		fmt.Println("============================================================")
-		fmt.Println("CheckBlockData")
-		fmt.Println(cs.Height)
-		fmt.Println(hex.EncodeToString(cs.ProposalBlock.Data.L2Config))
-		fmt.Println(hex.EncodeToString(cs.ProposalBlock.Data.ZkConfig))
-		fmt.Println(hex.EncodeToString(cs.ProposalBlock.Data.Root))
-		fmt.Println("============================================================")
+		// fmt.Println("============================================================")
+		// fmt.Println("CheckBlockData")
+		// fmt.Println(cs.Height)
+		// fmt.Println(hex.EncodeToString(cs.ProposalBlock.Data.L2Config))
+		// fmt.Println(hex.EncodeToString(cs.ProposalBlock.Data.ZkConfig))
+		// fmt.Println(hex.EncodeToString(cs.ProposalBlock.Data.Root))
+		// fmt.Println("============================================================")
 		valid, err := cs.l2Node.CheckBlockData(
 			l2node.ConvertTxsToBytes(cs.ProposalBlock.Data.Txs),
 			cs.ProposalBlock.Data.L2Config,
@@ -1774,11 +1773,11 @@ func (cs *State) finalizeCommit(height int64) {
 		logger.Error(err.Error())
 		return
 	}
-	fmt.Println("============================================================")
-	fmt.Println("DeliverBlock")
-	fmt.Println(hex.EncodeToString(block.Data.L2Config))
-	fmt.Println(hex.EncodeToString(block.Data.ZkConfig))
-	fmt.Println("============================================================")
+	// fmt.Println("============================================================")
+	// fmt.Println("DeliverBlock")
+	// fmt.Println(hex.EncodeToString(block.Data.L2Config))
+	// fmt.Println(hex.EncodeToString(block.Data.ZkConfig))
+	// fmt.Println("============================================================")
 
 	// Execute and commit the block, update and save the state.
 	// NOTE The block.AppHash wont reflect these txs until the next block.
@@ -2385,11 +2384,11 @@ func (cs *State) signVote(
 		}
 		vote.BLSSignature = blssignatures.SignatureToBytes(sig)
 
-		fmt.Println("========================")
-		fmt.Println("BatchContext")
-		fmt.Println(batchStartHeight)
-		fmt.Println(hex.EncodeToString(batchContext))
-		fmt.Println("========================")
+		// fmt.Println("========================")
+		// fmt.Println("BatchContext")
+		// fmt.Println(batchStartHeight)
+		// fmt.Println(hex.EncodeToString(batchContext))
+		// fmt.Println("========================")
 	}
 
 	return vote, nil

@@ -1,7 +1,6 @@
 package state
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -130,12 +129,12 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 				// return nil, err
 				panic(err)
 			}
-			fmt.Println("============================================================")
-			fmt.Println("RequestBlockData")
-			fmt.Println(height)
-			fmt.Println(hex.EncodeToString(l2Config))
-			fmt.Println(hex.EncodeToString(zkConfig))
-			fmt.Println("============================================================")
+			// fmt.Println("============================================================")
+			// fmt.Println("RequestBlockData")
+			// fmt.Println(height)
+			// fmt.Println(hex.EncodeToString(l2Config))
+			// fmt.Println(hex.EncodeToString(zkConfig))
+			// fmt.Println("============================================================")
 		}
 	} else {
 		txs, l2Config, zkConfig, root, err = l2Node.RequestBlockData(height)
@@ -143,12 +142,12 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 			// return nil, err
 			panic(err)
 		}
-		fmt.Println("============================================================")
-		fmt.Println("RequestBlockData")
-		fmt.Println(height)
-		fmt.Println(hex.EncodeToString(l2Config))
-		fmt.Println(hex.EncodeToString(zkConfig))
-		fmt.Println("============================================================")
+		// fmt.Println("============================================================")
+		// fmt.Println("RequestBlockData")
+		// fmt.Println(height)
+		// fmt.Println(hex.EncodeToString(l2Config))
+		// fmt.Println(hex.EncodeToString(zkConfig))
+		// fmt.Println("============================================================")
 	}
 
 	block := state.MakeBlock(height, l2node.ConvertBytesToTxs(txs), l2Config, zkConfig, root, commit, evidence, proposerAddr)
@@ -226,7 +225,9 @@ func (blockExec *BlockExecutor) ValidateBlock(state State, block *types.Block) e
 // It takes a blockID to avoid recomputing the parts hash.
 func (blockExec *BlockExecutor) ApplyBlock(
 	state State, blockID types.BlockID, block *types.Block,
-) (State, int64, error) {
+) (
+	State, int64, error,
+) {
 
 	if err := validateBlock(state, block); err != nil {
 		return state, 0, ErrInvalidBlock(err)

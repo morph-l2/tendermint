@@ -1,7 +1,6 @@
 package l2node
 
 import (
-	"encoding/hex"
 	"fmt"
 	"time"
 )
@@ -40,12 +39,12 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 					fmt.Println("ERROR:", err.Error())
 					return
 				}
-				fmt.Println("============================================================")
-				fmt.Println("RequestBlockData")
-				fmt.Println(height)
-				fmt.Println(hex.EncodeToString(l2Config))
-				fmt.Println(hex.EncodeToString(zkConfig))
-				fmt.Println("============================================================")
+				// fmt.Println("============================================================")
+				// fmt.Println("RequestBlockData")
+				// fmt.Println(height)
+				// fmt.Println(hex.EncodeToString(l2Config))
+				// fmt.Println(hex.EncodeToString(zkConfig))
+				// fmt.Println("============================================================")
 				if len(txs) > 0 {
 					n.blockData = &BlockData{
 						Txs:      txs,
@@ -72,12 +71,12 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 						fmt.Println("ERROR:", err.Error())
 						return
 					}
-					fmt.Println("============================================================")
-					fmt.Println("RequestBlockData")
-					fmt.Println(height)
-					fmt.Println(hex.EncodeToString(l2Config))
-					fmt.Println(hex.EncodeToString(zkConfig))
-					fmt.Println("============================================================")
+					// fmt.Println("============================================================")
+					// fmt.Println("RequestBlockData")
+					// fmt.Println(height)
+					// fmt.Println(hex.EncodeToString(l2Config))
+					// fmt.Println(hex.EncodeToString(zkConfig))
+					// fmt.Println("============================================================")
 					if len(txs) > 0 {
 						n.blockData = &BlockData{
 							Txs:      txs,
