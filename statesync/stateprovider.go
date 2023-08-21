@@ -53,7 +53,9 @@ func NewLightClientStateProvider(
 	servers []string,
 	trustOptions light.TrustOptions,
 	logger log.Logger,
-) (StateProvider, error) {
+) (
+	StateProvider, error,
+) {
 	if len(servers) < 2 {
 		return nil, fmt.Errorf("at least 2 RPC servers are required, got %v", len(servers))
 	}
@@ -72,8 +74,16 @@ func NewLightClientStateProvider(
 		providerRemotes[provider] = server
 	}
 
-	lc, err := light.NewClient(ctx, chainID, trustOptions, providers[0], providers[1:],
-		lightdb.New(dbm.NewMemDB(), ""), light.Logger(logger), light.MaxRetryAttempts(5))
+	lc, err := light.NewClient(
+		ctx,
+		chainID,
+		trustOptions,
+		providers[0],
+		providers[1:],
+		lightdb.New(dbm.NewMemDB(), ""),
+		light.Logger(logger),
+		light.MaxRetryAttempts(5),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -182,8 +192,10 @@ func (s *lightClientStateProvider) State(ctx context.Context, height uint64) (sm
 	rpcclient := lightrpc.NewClient(primaryRPC, s.lc)
 	result, err := rpcclient.ConsensusParams(ctx, &currentLightBlock.Height)
 	if err != nil {
-		return sm.State{}, fmt.Errorf("unable to fetch consensus parameters for height %v: %w",
-			nextLightBlock.Height, err)
+		return sm.State{}, fmt.Errorf(
+			"unable to fetch consensus parameters for height %v: %w",
+			nextLightBlock.Height, err,
+		)
 	}
 	state.ConsensusParams = result.ConsensusParams
 	state.LastHeightConsensusParamsChanged = currentLightBlock.Height

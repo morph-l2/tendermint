@@ -291,12 +291,10 @@ func (h *Handshaker) ReplayBlocks(
 	stateBlockHeight := state.LastBlockHeight
 	h.logger.Info(
 		"ABCI Replay Blocks",
-		"appHeight",
-		appBlockHeight,
-		"storeHeight",
-		storeBlockHeight,
-		"stateHeight",
-		stateBlockHeight)
+		"appHeight", appBlockHeight,
+		"storeHeight", storeBlockHeight,
+		"stateHeight", stateBlockHeight,
+	)
 
 	// If appBlockHeight == 0 it means that we are at genesis and hence should send InitChain.
 	if appBlockHeight == 0 {
@@ -429,8 +427,12 @@ func (h *Handshaker) ReplayBlocks(
 
 	}
 
-	panic(fmt.Sprintf("uncovered case! appHeight: %d, storeHeight: %d, stateHeight: %d",
-		appBlockHeight, storeBlockHeight, stateBlockHeight))
+	panic(
+		fmt.Sprintf(
+			"uncovered case! appHeight: %d, storeHeight: %d, stateHeight: %d",
+			appBlockHeight, storeBlockHeight, stateBlockHeight,
+		),
+	)
 }
 
 func (h *Handshaker) replayBlocks(
@@ -438,7 +440,10 @@ func (h *Handshaker) replayBlocks(
 	proxyApp proxy.AppConns,
 	appBlockHeight,
 	storeBlockHeight int64,
-	mutateState bool) ([]byte, error) {
+	mutateState bool,
+) (
+	[]byte, error,
+) {
 	// App is further behind than it should be, so we need to replay blocks.
 	// We replay all blocks from appBlockHeight+1.
 	//
@@ -514,7 +519,8 @@ func assertAppHashEqualsOneFromBlock(appHash []byte, block *types.Block) {
 
 Block: %v
 `,
-			appHash, block.AppHash, block))
+			appHash, block.AppHash, block,
+		))
 	}
 }
 
@@ -526,6 +532,7 @@ func assertAppHashEqualsOneFromState(appHash []byte, state sm.State) {
 State: %v
 
 Did you reset Tendermint without resetting your application's data?`,
-			appHash, state.AppHash, state))
+			appHash, state.AppHash, state,
+		))
 	}
 }

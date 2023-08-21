@@ -111,7 +111,7 @@ func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
 
 	return NewNode(
 		config,
-		l2node.NewMockL2Node(0),
+		l2node.NewMockL2Node(1),
 		privval.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile()),
 		&blsPrivKey,
 		nodeKey,
@@ -792,8 +792,10 @@ func NewNode(
 	// and replays any blocks as necessary to sync tendermint with the app.
 	consensusLogger := logger.With("module", "consensus")
 	if !stateSync {
-		if err := doHandshake(stateStore, state, blockStore, genDoc, eventBus, proxyApp, consensusLogger); err != nil {
-			return nil, err
+		if state.LastBlockHeight == 0 {
+			if err := doHandshake(stateStore, state, blockStore, genDoc, eventBus, proxyApp, consensusLogger); err != nil {
+				return nil, err
+			}
 		}
 
 		// Reload the state. It will have the Version.Consensus.App set by the
