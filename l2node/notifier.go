@@ -6,6 +6,7 @@ import (
 )
 
 type BlockData struct {
+	Height   int64
 	Txs      [][]byte
 	L2Config []byte
 	ZKConfig []byte
@@ -47,6 +48,7 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 				// fmt.Println("============================================================")
 				if len(txs) > 0 {
 					n.blockData = &BlockData{
+						Height:   height,
 						Txs:      txs,
 						L2Config: l2Config,
 						ZKConfig: zkConfig,
@@ -79,6 +81,7 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 					// fmt.Println("============================================================")
 					if len(txs) > 0 {
 						n.blockData = &BlockData{
+							Height:   height,
 							Txs:      txs,
 							L2Config: l2Config,
 							ZKConfig: zkConfig,

@@ -120,7 +120,7 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 	var err error
 	if config.WaitForTxs() {
 		blockData := blockExec.notifier.GetBlockData()
-		if blockData != nil {
+		if blockData != nil && blockData.Height == height {
 			txs, l2Config, zkConfig, root = blockData.Txs, blockData.L2Config, blockData.ZKConfig, blockData.Root
 			blockExec.notifier.CleanBlockData()
 		} else {
