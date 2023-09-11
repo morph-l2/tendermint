@@ -9,13 +9,11 @@ var _ L2Node = &MockL2Node{}
 
 type MockL2Node struct {
 	TxNumber int
-	NextVals [][]byte
 }
 
-func NewMockL2Node(n int, vals [][]byte) L2Node {
+func NewMockL2Node(n int) L2Node {
 	return &MockL2Node{
 		TxNumber: n,
-		NextVals: vals,
 	}
 }
 
@@ -80,6 +78,6 @@ func (l MockL2Node) DeliverBlock(
 	nextValidatorSet [][]byte,
 	err error,
 ) {
-	nextValidatorSet = l.NextVals
+	nextValidatorSet = consensusData.ValidatorSet
 	return
 }
