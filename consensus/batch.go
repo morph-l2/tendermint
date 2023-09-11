@@ -28,9 +28,9 @@ func (cs *State) getBatchStart() (int64, time.Time) {
 func (cs *State) isBatchPoint(batchStartHeight int64, batchSize int, batchStartTime time.Time) bool {
 	// batch_blocks_interval, batch_max_bytes and batch_timeout can't be all 0
 	// block_interval || max_bytes || timeout
-	return (cs.config.BatchBlocksInterval > 0 && cs.ProposalBlock.Height-batchStartHeight >= cs.config.BatchBlocksInterval) ||
-		(cs.config.BatchMaxBytes > 0 && batchSize >= int(cs.config.BatchMaxBytes)) ||
-		(cs.config.BatchTimeout > 0 && cs.ProposalBlock.Time.Sub(batchStartTime) >= cs.config.BatchTimeout)
+	return (cs.state.ConsensusParams.Batch.BlocksInterval > 0 && cs.ProposalBlock.Height-batchStartHeight >= cs.state.ConsensusParams.Batch.BlocksInterval) ||
+		(cs.state.ConsensusParams.Batch.MaxBytes > 0 && batchSize >= int(cs.state.ConsensusParams.Batch.MaxBytes)) ||
+		(cs.state.ConsensusParams.Batch.Timeout > 0 && cs.ProposalBlock.Time.Sub(batchStartTime) >= cs.state.ConsensusParams.Batch.Timeout)
 }
 
 func (cs *State) batchData(batchStartHeight int64) (zkConfigContext []byte, rawBatchTxs [][]byte, root []byte) {

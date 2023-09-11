@@ -33,10 +33,18 @@ var ABCIPubKeyTypesToNames = map[string]string{
 // ConsensusParams contains consensus critical parameters that determine the
 // validity of blocks.
 type ConsensusParams struct {
+	Batch     BatchParams     `json:"batch"`
 	Block     BlockParams     `json:"block"`
 	Evidence  EvidenceParams  `json:"evidence"`
 	Validator ValidatorParams `json:"validator"`
 	Version   VersionParams   `json:"version"`
+}
+
+// BatchParams define when to generate batch
+type BatchParams struct {
+	BlocksInterval int64         `json:"blocks_interval"`
+	MaxBytes       int64         `json:"max_bytes"`
+	Timeout        time.Duration `json:"timeout"`
 }
 
 // BlockParams define limits on the block size and gas plus minimum time
@@ -66,10 +74,19 @@ type VersionParams struct {
 // DefaultConsensusParams returns a default ConsensusParams.
 func DefaultConsensusParams() *ConsensusParams {
 	return &ConsensusParams{
+		Batch:     DefaultBatchParams(),
 		Block:     DefaultBlockParams(),
 		Evidence:  DefaultEvidenceParams(),
 		Validator: DefaultValidatorParams(),
 		Version:   DefaultVersionParams(),
+	}
+}
+
+func DefaultBatchParams() BatchParams {
+	return BatchParams{
+		BlocksInterval: 10,
+		MaxBytes:       8388608,
+		Timeout:        60 * time.Second,
 	}
 }
 
@@ -117,49 +134,81 @@ func IsValidPubkeyType(params ValidatorParams, pubkeyType string) bool {
 // allowed limits, and returns an error if they are not.
 func (params ConsensusParams) ValidateBasic() error {
 	if params.Block.MaxBytes <= 0 {
-		return fmt.Errorf("block.MaxBytes must be greater than 0. Got %d",
-			params.Block.MaxBytes)
+		return fmt.Errorf(
+			"block.MaxBytes must be greater than 0. Got %d",
+			params.Block.MaxBytes,
+		)
 	}
 	if params.Block.MaxBytes > MaxBlockSizeBytes {
-		return fmt.Errorf("block.MaxBytes is too big. %d > %d",
-			params.Block.MaxBytes, MaxBlockSizeBytes)
+		return fmt.Errorf(
+			"block.MaxBytes is too big. %d > %d",
+			params.Block.MaxBytes, MaxBlockSizeBytes,
+		)
 	}
 
 	if params.Block.MaxGas < -1 {
-		return fmt.Errorf("block.MaxGas must be greater or equal to -1. Got %d",
-			params.Block.MaxGas)
+		return fmt.Errorf(
+			"block.MaxGas must be greater or equal to -1. Got %d",
+			params.Block.MaxGas,
+		)
 	}
 
 	if params.Evidence.MaxAgeNumBlocks <= 0 {
-		return fmt.Errorf("evidence.MaxAgeNumBlocks must be greater than 0. Got %d",
-			params.Evidence.MaxAgeNumBlocks)
+		return fmt.Errorf(
+			"evidence.MaxAgeNumBlocks must be greater than 0. Got %d",
+			params.Evidence.MaxAgeNumBlocks,
+		)
 	}
 
 	if params.Evidence.MaxAgeDuration <= 0 {
-		return fmt.Errorf("evidence.MaxAgeDuration must be grater than 0 if provided, Got %v",
-			params.Evidence.MaxAgeDuration)
+		return fmt.Errorf(
+			"evidence.MaxAgeDuration must be grater than 0 if provided, Got %v",
+			params.Evidence.MaxAgeDuration,
+		)
 	}
 
 	if params.Evidence.MaxBytes > params.Block.MaxBytes {
-		return fmt.Errorf("evidence.MaxBytesEvidence is greater than upper bound, %d > %d",
-			params.Evidence.MaxBytes, params.Block.MaxBytes)
+		return fmt.Errorf(
+			"evidence.MaxBytesEvidence is greater than upper bound, %d > %d",
+			params.Evidence.MaxBytes, params.Block.MaxBytes,
+		)
 	}
 
 	if params.Evidence.MaxBytes < 0 {
-		return fmt.Errorf("evidence.MaxBytes must be non negative. Got: %d",
-			params.Evidence.MaxBytes)
+		return fmt.Errorf(
+			"evidence.MaxBytes must be non negative. Got: %d",
+			params.Evidence.MaxBytes,
+		)
 	}
 
 	if len(params.Validator.PubKeyTypes) == 0 {
 		return errors.New("len(Validator.PubKeyTypes) must be greater than 0")
 	}
 
+	if params.Batch.BlocksInterval < 0 {
+		return errors.New("blocks_interval can't be negative")
+	}
+
+	if params.Batch.MaxBytes < 0 {
+		return errors.New("max_bytes can't be negative")
+	}
+
+	if params.Batch.Timeout < 0 {
+		return errors.New("timeout can't be negative")
+	}
+
+	if params.Batch.BlocksInterval <= 0 && params.Batch.MaxBytes <= 0 && params.Batch.Timeout <= 0 {
+		return errors.New("blocks_interval, max_bytes and timeout can't be all 0")
+	}
+
 	// Check if keyType is a known ABCIPubKeyType
 	for i := 0; i < len(params.Validator.PubKeyTypes); i++ {
 		keyType := params.Validator.PubKeyTypes[i]
 		if _, ok := ABCIPubKeyTypesToNames[keyType]; !ok {
-			return fmt.Errorf("params.Validator.PubKeyTypes[%d], %s, is an unknown pubkey type",
-				i, keyType)
+			return fmt.Errorf(
+				"params.Validator.PubKeyTypes[%d], %s, is an unknown pubkey type",
+				i, keyType,
+			)
 		}
 	}
 
@@ -183,10 +232,10 @@ func (params ConsensusParams) Hash() []byte {
 		panic(err)
 	}
 
-	_, err = hasher.Write(bz)
-	if err != nil {
+	if _, err := hasher.Write(bz); err != nil {
 		panic(err)
 	}
+
 	return hasher.Sum(nil)
 }
 
@@ -200,6 +249,11 @@ func (params ConsensusParams) Update(params2 *tmproto.ConsensusParams) Consensus
 	}
 
 	// we must defensively consider any structs may be nil
+	if params2.Batch != nil {
+		res.Batch.BlocksInterval = params2.Batch.BlocksInterval
+		res.Batch.MaxBytes = params2.Batch.MaxBytes
+		res.Batch.Timeout = params2.Batch.Timeout
+	}
 	if params2.Block != nil {
 		res.Block.MaxBytes = params2.Block.MaxBytes
 		res.Block.MaxGas = params2.Block.MaxGas
@@ -217,11 +271,17 @@ func (params ConsensusParams) Update(params2 *tmproto.ConsensusParams) Consensus
 	if params2.Version != nil {
 		res.Version.App = params2.Version.App
 	}
+
 	return res
 }
 
 func (params *ConsensusParams) ToProto() tmproto.ConsensusParams {
 	return tmproto.ConsensusParams{
+		Batch: &tmproto.BatchParams{
+			BlocksInterval: params.Batch.BlocksInterval,
+			MaxBytes:       params.Batch.MaxBytes,
+			Timeout:        params.Batch.Timeout,
+		},
 		Block: &tmproto.BlockParams{
 			MaxBytes: params.Block.MaxBytes,
 			MaxGas:   params.Block.MaxGas,
@@ -242,6 +302,11 @@ func (params *ConsensusParams) ToProto() tmproto.ConsensusParams {
 
 func ConsensusParamsFromProto(pbParams tmproto.ConsensusParams) ConsensusParams {
 	return ConsensusParams{
+		Batch: BatchParams{
+			BlocksInterval: pbParams.Batch.BlocksInterval,
+			MaxBytes:       pbParams.Batch.MaxBytes,
+			Timeout:        pbParams.Batch.Timeout,
+		},
 		Block: BlockParams{
 			MaxBytes: pbParams.Block.MaxBytes,
 			MaxGas:   pbParams.Block.MaxGas,

@@ -109,10 +109,12 @@ func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
 		return nil, fmt.Errorf("failed to load bls priv key")
 	}
 
+	privValidator := privval.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile())
+	pubkey, _ := privValidator.GetPubKey()
 	return NewNode(
 		config,
-		l2node.NewMockL2Node(1),
-		privval.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile()),
+		l2node.NewMockL2Node(1, [][]byte{pubkey.Bytes()}),
+		privValidator,
 		&blsPrivKey,
 		nodeKey,
 		proxy.DefaultClientCreator(config.ProxyApp, config.ABCI, config.DBDir()),

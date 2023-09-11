@@ -1,26 +1,25 @@
 package l2node
 
 import (
-	"math/rand"
+	tmrand "github.com/tendermint/tendermint/libs/rand"
+	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 )
 
 var _ L2Node = &MockL2Node{}
 
 type MockL2Node struct {
-	txNumber int
+	TxNumber int
+	NextVals [][]byte
 }
 
-func NewMockL2Node(n int) L2Node {
+func NewMockL2Node(n int, vals [][]byte) L2Node {
 	return &MockL2Node{
-		txNumber: n,
+		TxNumber: n,
+		NextVals: vals,
 	}
 }
 
-func (l *MockL2Node) SetTxNumber(n int) {
-	l.txNumber = n
-}
-
-func (l *MockL2Node) RequestHeight(
+func (l MockL2Node) RequestHeight(
 	tmHeight int64,
 ) (
 	height int64,
@@ -33,7 +32,7 @@ func (l *MockL2Node) RequestHeight(
 	return
 }
 
-func (l *MockL2Node) EncodeTxs(
+func (l MockL2Node) EncodeTxs(
 	batchTxs [][]byte,
 ) (
 	encodedTxs []byte,
@@ -45,19 +44,19 @@ func (l *MockL2Node) EncodeTxs(
 	return
 }
 
-func (l *MockL2Node) RequestBlockData(
+func (l MockL2Node) RequestBlockData(
 	height int64,
 ) (
 	txs [][]byte,
 	configs Configs,
 	err error,
 ) {
-	for i := int(0); i < l.txNumber; i++ {
-		txs = append(txs, randBytes(10))
+	for i := int(0); i < l.TxNumber; i++ {
+		txs = append(txs, tmrand.Bytes(10))
 	}
-	configs.L2Config = randBytes(8)
-	configs.ZKConfig = randBytes(8)
-	configs.Root = randBytes(8)
+	configs.L2Config = tmrand.Bytes(8)
+	configs.ZKConfig = tmrand.Bytes(8)
+	configs.Root = tmrand.Bytes(8)
 	return
 }
 
@@ -77,17 +76,10 @@ func (l MockL2Node) DeliverBlock(
 	configs Configs,
 	consensusData ConsensusData,
 ) (
-	nextBatchParams BatchParams,
+	nextBatchParams *tmproto.BatchParams,
 	nextValidatorSet [][]byte,
 	err error,
 ) {
-	// TODO nextBatchParams
-	// TODO nextValidatorSet
+	nextValidatorSet = l.NextVals
 	return
-}
-
-func randBytes(n int) []byte {
-	bytes := make([]byte, n)
-	rand.Read(bytes)
-	return bytes
 }

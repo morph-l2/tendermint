@@ -453,11 +453,6 @@ FOR_LOOP:
 					Validators:    vals,
 					BlsSignatures: blsSignatures,
 				},
-				// first.Data.L2Config,
-				// first.Data.ZkConfig,
-				// l2node.GetValidators(second.LastCommit),
-				// 0, // TODO
-				// l2node.GetBLSSignatures(second.LastCommit),
 			)
 			if err != nil {
 				panic(err)
@@ -465,7 +460,13 @@ FOR_LOOP:
 
 			// TODO: same thing for app - but we would need a way to
 			// get the hash without persisting the state
-			state, _, err = bcR.blockExec.ApplyBlock(state, firstID, first, nextBatchParams, nextValidatorSet)
+			state, _, err = bcR.blockExec.ApplyBlock(
+				state,
+				firstID,
+				first,
+				bcR.blockExec.GetConsensusParamsUpdate(nextBatchParams, nil, nil, nil, nil),
+				bcR.blockExec.GetValidatorUpdates(nextValidatorSet, valset),
+			)
 			if err != nil {
 				// TODO This is bad, are we zombie?
 				panic(fmt.Sprintf("Failed to process committed block (%d:%X): %v", first.Height, first.Hash(), err))

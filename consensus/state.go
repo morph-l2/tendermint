@@ -1796,8 +1796,8 @@ func (cs *State) finalizeCommit(height int64) {
 			PartSetHeader: blockParts.Header(),
 		},
 		block,
-		nextBatchParams,
-		nextValidatorSet,
+		cs.blockExec.GetConsensusParamsUpdate(nextBatchParams, nil, nil, nil, nil),
+		cs.blockExec.GetValidatorUpdates(nextValidatorSet, valset),
 	)
 	if err != nil {
 		logger.Error("failed to apply block", "err", err)

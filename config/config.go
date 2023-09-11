@@ -857,12 +857,6 @@ type ConsensusConfig struct {
 	PeerGossipSleepDuration     time.Duration `mapstructure:"peer_gossip_sleep_duration"`
 	PeerQueryMaj23SleepDuration time.Duration `mapstructure:"peer_query_maj23_sleep_duration"`
 
-	// Batch interval parameters
-	// TODO: If the configuration of each validator node is different
-	BatchBlocksInterval int64         `mapstructure:"batch_blocks_interval"`
-	BatchMaxBytes       int64         `mapstructure:"batch_max_bytes"`
-	BatchTimeout        time.Duration `mapstructure:"batch_timeout"`
-
 	DoubleSignCheckHeight int64 `mapstructure:"double_sign_check_height"`
 }
 
@@ -882,9 +876,6 @@ func DefaultConsensusConfig() *ConsensusConfig {
 		CreateEmptyBlocksInterval:   0 * time.Second,
 		PeerGossipSleepDuration:     100 * time.Millisecond,
 		PeerQueryMaj23SleepDuration: 2000 * time.Millisecond,
-		BatchBlocksInterval:         int64(10),
-		BatchMaxBytes:               int64(8388608),
-		BatchTimeout:                60000 * time.Millisecond,
 		DoubleSignCheckHeight:       int64(0),
 	}
 }
@@ -984,18 +975,6 @@ func (cfg *ConsensusConfig) ValidateBasic() error {
 	}
 	if cfg.PeerQueryMaj23SleepDuration < 0 {
 		return errors.New("peer_query_maj23_sleep_duration can't be negative")
-	}
-	if cfg.BatchBlocksInterval < 0 {
-		return errors.New("batch_blocks_interval can't be negative")
-	}
-	if cfg.BatchMaxBytes < 0 {
-		return errors.New("batch_max_bytes can't be negative")
-	}
-	if cfg.BatchTimeout < 0 {
-		return errors.New("batch_timeout can't be negative")
-	}
-	if cfg.BatchBlocksInterval <= 0 && cfg.BatchMaxBytes <= 0 && cfg.BatchTimeout <= 0 {
-		return errors.New("batch_blocks_interval, batch_max_bytes and batch_timeout can't be all 0")
 	}
 	if cfg.DoubleSignCheckHeight < 0 {
 		return errors.New("double_sign_check_height can't be negative")

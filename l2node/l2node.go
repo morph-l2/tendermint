@@ -1,6 +1,7 @@
 package l2node
 
 import (
+	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/types"
 )
 
@@ -40,7 +41,7 @@ type L2Node interface {
 		configs Configs,
 		consensusData ConsensusData,
 	) (
-		nextBatchParams BatchParams,
+		nextBatchParams *tmproto.BatchParams, // set nil if no update
 		nextValidatorSet [][]byte,
 		err error,
 	)
@@ -50,12 +51,6 @@ type Configs struct {
 	L2Config []byte
 	ZKConfig []byte
 	Root     []byte
-}
-
-type BatchParams struct {
-	BatchBlocksInterval int64
-	BatchMaxBytes       int64
-	BatchTimeout        int64
 }
 
 type ConsensusData struct {
