@@ -1,6 +1,7 @@
 package blocksync
 
 import (
+	"bytes"
 	"fmt"
 	"reflect"
 	"time"
@@ -386,12 +387,10 @@ FOR_LOOP:
 			// first.Hash() doesn't verify the tx contents, so MakePartSet() is
 			// currently necessary.
 			err = state.Validators.VerifyCommitLight(chainID, firstID, first.Height, second.LastCommit)
-
 			if err == nil {
 				// validate the block before we persist it
 				err = bcR.blockExec.ValidateBlock(state, first)
 			}
-
 			if err != nil {
 				bcR.Logger.Error("Error in validation", "err", err)
 				peerID := bcR.pool.RedoRequest(first.Height)
@@ -424,19 +423,49 @@ FOR_LOOP:
 				panic("error1: nil sig or val")
 			}
 
-			if err := bcR.l2Node.DeliverBlock(
+			var valset [][]byte
+			var vals [][]byte
+			valAddrs := l2node.GetValidators(second.LastCommit)
+			for _, val := range state.Validators.Validators {
+				valset = append(valset, val.PubKey.Bytes())
+				for _, addr := range valAddrs {
+					if bytes.Equal(val.Address, addr) {
+						vals = append(vals, val.PubKey.Bytes())
+					}
+				}
+			}
+
+			blsSignatures := l2node.GetBLSSignatures(second.LastCommit)
+			if len(valAddrs) == 0 || len(blsSignatures) == 0 {
+				bcR.Logger.Error("nil sig or val")
+				return
+			}
+
+			nextBatchParams, nextValidatorSet, err := bcR.l2Node.DeliverBlock(
 				l2node.ConvertTxsToBytes(first.Data.Txs),
-				first.Data.L2Config,
-				first.Data.ZkConfig,
-				l2node.GetValidators(second.LastCommit),
-				l2node.GetBLSSignatures(second.LastCommit),
-			); err != nil {
+				l2node.Configs{
+					L2Config: first.Data.L2Config,
+					ZKConfig: first.Data.ZkConfig,
+					Root:     first.Data.Root,
+				},
+				l2node.ConsensusData{
+					ValidatorSet:  valset,
+					Validators:    vals,
+					BlsSignatures: blsSignatures,
+				},
+				// first.Data.L2Config,
+				// first.Data.ZkConfig,
+				// l2node.GetValidators(second.LastCommit),
+				// 0, // TODO
+				// l2node.GetBLSSignatures(second.LastCommit),
+			)
+			if err != nil {
 				panic(err)
 			}
 
 			// TODO: same thing for app - but we would need a way to
 			// get the hash without persisting the state
-			state, _, err = bcR.blockExec.ApplyBlock(state, firstID, first)
+			state, _, err = bcR.blockExec.ApplyBlock(state, firstID, first, nextBatchParams, nextValidatorSet)
 			if err != nil {
 				// TODO This is bad, are we zombie?
 				panic(fmt.Sprintf("Failed to process committed block (%d:%X): %v", first.Height, first.Hash(), err))

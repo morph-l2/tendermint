@@ -1347,18 +1347,13 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 
 	if cs.isValidator(cs.privValidatorPubKey.Address()) {
 		// request l2node to check whether the block data is valid
-		// fmt.Println("============================================================")
-		// fmt.Println("CheckBlockData")
-		// fmt.Println(cs.Height)
-		// fmt.Println(hex.EncodeToString(cs.ProposalBlock.Data.L2Config))
-		// fmt.Println(hex.EncodeToString(cs.ProposalBlock.Data.ZkConfig))
-		// fmt.Println(hex.EncodeToString(cs.ProposalBlock.Data.Root))
-		// fmt.Println("============================================================")
 		valid, err := cs.l2Node.CheckBlockData(
 			l2node.ConvertTxsToBytes(cs.ProposalBlock.Data.Txs),
-			cs.ProposalBlock.Data.L2Config,
-			cs.ProposalBlock.Data.ZkConfig,
-			cs.ProposalBlock.Data.Root,
+			l2node.Configs{
+				L2Config: cs.ProposalBlock.Data.L2Config,
+				ZKConfig: cs.ProposalBlock.Data.ZkConfig,
+				Root:     cs.ProposalBlock.Data.Root,
+			},
 		)
 		if err != nil {
 			logger.Error("check block data failed", err)
@@ -1751,41 +1746,49 @@ func (cs *State) finalizeCommit(height int64) {
 	// Create a copy of the state for staging and an event cache for txs.
 	stateCopy := cs.state.Copy()
 
-	// TODO
 	if len(block.Data.L2Config) == 0 || len(block.Data.ZkConfig) == 0 || len(block.Data.Root) == 0 {
 		panic("error3: nil config")
 	}
 
-	validators := l2node.GetValidators(seenCommit)
+	var valset [][]byte
+	var vals [][]byte
+	valAddrs := l2node.GetValidators(seenCommit)
+	for _, val := range stateCopy.Validators.Validators {
+		valset = append(valset, val.PubKey.Bytes())
+		for _, addr := range valAddrs {
+			if bytes.Equal(val.Address, addr) {
+				vals = append(vals, val.PubKey.Bytes())
+			}
+		}
+	}
+
 	blsSignatures := l2node.GetBLSSignatures(seenCommit)
-	if len(validators) == 0 || len(blsSignatures) == 0 {
+	if len(valAddrs) == 0 || len(blsSignatures) == 0 {
 		logger.Error("error3: nil sig or val")
 		return
 	}
 
-	if err := cs.l2Node.DeliverBlock(
+	nextBatchParams, nextValidatorSet, err := cs.l2Node.DeliverBlock(
 		l2node.ConvertTxsToBytes(block.Data.Txs),
-		block.Data.L2Config,
-		block.Data.ZkConfig,
-		validators,
-		blsSignatures,
-	); err != nil {
+		l2node.Configs{
+			L2Config: block.Data.L2Config,
+			ZKConfig: block.Data.ZkConfig,
+			Root:     block.Data.Root,
+		},
+		l2node.ConsensusData{
+			ValidatorSet:  valset,
+			Validators:    vals,
+			BlsSignatures: blsSignatures,
+		},
+	)
+	if err != nil {
 		logger.Error(err.Error())
 		return
 	}
-	// fmt.Println("============================================================")
-	// fmt.Println("DeliverBlock")
-	// fmt.Println(hex.EncodeToString(block.Data.L2Config))
-	// fmt.Println(hex.EncodeToString(block.Data.ZkConfig))
-	// fmt.Println("============================================================")
 
 	// Execute and commit the block, update and save the state.
 	// NOTE The block.AppHash wont reflect these txs until the next block.
-	var (
-		err          error
-		retainHeight int64
-	)
-
+	var retainHeight int64
 	stateCopy, retainHeight, err = cs.blockExec.ApplyBlock(
 		stateCopy,
 		types.BlockID{
@@ -1793,6 +1796,8 @@ func (cs *State) finalizeCommit(height int64) {
 			PartSetHeader: blockParts.Header(),
 		},
 		block,
+		nextBatchParams,
+		nextValidatorSet,
 	)
 	if err != nil {
 		logger.Error("failed to apply block", "err", err)

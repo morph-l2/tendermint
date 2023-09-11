@@ -35,24 +35,18 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 	if createEmptyBlocksInterval == 0 {
 		go func() {
 			for {
-				txs, l2Config, zkConfig, root, err := n.l2Node.RequestBlockData(height)
+				txs, configs, err := n.l2Node.RequestBlockData(height)
 				if err != nil {
 					fmt.Println("ERROR:", err.Error())
 					return
 				}
-				// fmt.Println("============================================================")
-				// fmt.Println("RequestBlockData")
-				// fmt.Println(height)
-				// fmt.Println(hex.EncodeToString(l2Config))
-				// fmt.Println(hex.EncodeToString(zkConfig))
-				// fmt.Println("============================================================")
 				if len(txs) > 0 {
 					n.blockData = &BlockData{
 						Height:   height,
 						Txs:      txs,
-						L2Config: l2Config,
-						ZKConfig: zkConfig,
-						Root:     root,
+						L2Config: configs.L2Config,
+						ZKConfig: configs.ZKConfig,
+						Root:     configs.Root,
 					}
 					n.txsAvailable <- struct{}{}
 					return
@@ -68,24 +62,18 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 				case <-timeout:
 					return
 				default:
-					txs, l2Config, zkConfig, root, err := n.l2Node.RequestBlockData(height)
+					txs, configs, err := n.l2Node.RequestBlockData(height)
 					if err != nil {
 						fmt.Println("ERROR:", err.Error())
 						return
 					}
-					// fmt.Println("============================================================")
-					// fmt.Println("RequestBlockData")
-					// fmt.Println(height)
-					// fmt.Println(hex.EncodeToString(l2Config))
-					// fmt.Println(hex.EncodeToString(zkConfig))
-					// fmt.Println("============================================================")
 					if len(txs) > 0 {
 						n.blockData = &BlockData{
 							Height:   height,
 							Txs:      txs,
-							L2Config: l2Config,
-							ZKConfig: zkConfig,
-							Root:     root,
+							L2Config: configs.L2Config,
+							ZKConfig: configs.ZKConfig,
+							Root:     configs.Root,
 						}
 						n.txsAvailable <- struct{}{}
 						return

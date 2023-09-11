@@ -114,43 +114,34 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 	maxDataBytes := types.MaxDataBytes(maxBytes, evSize, state.Validators.Size())
 
 	var txs [][]byte
-	var l2Config []byte
-	var zkConfig []byte
-	var root []byte
+	var configs l2node.Configs
 	var err error
 	if config.WaitForTxs() {
 		blockData := blockExec.notifier.GetBlockData()
 		if blockData != nil && blockData.Height == height {
-			txs, l2Config, zkConfig, root = blockData.Txs, blockData.L2Config, blockData.ZKConfig, blockData.Root
+			txs = blockData.Txs
+			configs = l2node.Configs{
+				L2Config: blockData.L2Config,
+				ZKConfig: blockData.ZKConfig,
+				Root:     blockData.Root,
+			}
 			blockExec.notifier.CleanBlockData()
 		} else {
-			txs, l2Config, zkConfig, root, err = l2Node.RequestBlockData(height)
+			txs, configs, err = l2Node.RequestBlockData(height)
 			if err != nil {
 				// return nil, err
 				panic(err)
 			}
-			// fmt.Println("============================================================")
-			// fmt.Println("RequestBlockData")
-			// fmt.Println(height)
-			// fmt.Println(hex.EncodeToString(l2Config))
-			// fmt.Println(hex.EncodeToString(zkConfig))
-			// fmt.Println("============================================================")
 		}
 	} else {
-		txs, l2Config, zkConfig, root, err = l2Node.RequestBlockData(height)
+		txs, configs, err = l2Node.RequestBlockData(height)
 		if err != nil {
 			// return nil, err
 			panic(err)
 		}
-		// fmt.Println("============================================================")
-		// fmt.Println("RequestBlockData")
-		// fmt.Println(height)
-		// fmt.Println(hex.EncodeToString(l2Config))
-		// fmt.Println(hex.EncodeToString(zkConfig))
-		// fmt.Println("============================================================")
 	}
 
-	block := state.MakeBlock(height, l2node.ConvertBytesToTxs(txs), l2Config, zkConfig, root, commit, evidence, proposerAddr)
+	block := state.MakeBlock(height, l2node.ConvertBytesToTxs(txs), configs.L2Config, configs.ZKConfig, configs.Root, commit, evidence, proposerAddr)
 
 	localLastCommit := buildLastCommitInfo(block, blockExec.store, state.InitialHeight)
 	rpp, err := blockExec.proxyApp.PrepareProposalSync(
@@ -178,7 +169,7 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 		return nil, err
 	}
 
-	return state.MakeBlock(height, txl, l2Config, zkConfig, root, commit, evidence, proposerAddr), nil
+	return state.MakeBlock(height, txl, configs.L2Config, configs.ZKConfig, configs.Root, commit, evidence, proposerAddr), nil
 }
 
 func (blockExec *BlockExecutor) ProcessProposal(
@@ -223,7 +214,11 @@ func (blockExec *BlockExecutor) ValidateBlock(state State, block *types.Block) e
 // from outside this package to process and commit an entire block.
 // It takes a blockID to avoid recomputing the parts hash.
 func (blockExec *BlockExecutor) ApplyBlock(
-	state State, blockID types.BlockID, block *types.Block,
+	state State,
+	blockID types.BlockID,
+	block *types.Block,
+	nextBatchParams l2node.BatchParams,
+	nextValidatorSet [][]byte,
 ) (
 	State, int64, error,
 ) {

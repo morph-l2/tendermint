@@ -954,47 +954,71 @@ func NewNode(
 	if err != nil {
 		panic(err)
 	}
-	// fmt.Println("============================================================")
-	// fmt.Println("RequestHeight")
-	// fmt.Println(csHeight)
-	// fmt.Println(h)
-	// fmt.Println("============================================================")
 
 	if h < csHeight {
 		for i := h + 1; i < csHeight; i++ {
 			block := blockStore.LoadBlock(i)
 			blockNext := blockStore.LoadBlock(i + 1)
-			// fmt.Println("============================================================")
-			// fmt.Println("Sync")
-			// fmt.Println(i)
-			// fmt.Println("DeliverBlock")
-			// fmt.Println(hex.EncodeToString(block.Data.L2Config))
-			// fmt.Println(hex.EncodeToString(block.Data.ZkConfig))
-			// fmt.Println("============================================================")
-			if err := node.ConsensusState().GetL2Node().DeliverBlock(
+
+			var valset [][]byte
+			var vals [][]byte
+			valAddrs := l2node.GetValidators(blockNext.LastCommit)
+			validators, err := stateStore.LoadValidators(h)
+			if err != nil {
+				panic(err)
+			}
+			for _, val := range validators.Validators {
+				valset = append(valset, val.PubKey.Bytes())
+				for _, addr := range valAddrs {
+					if bytes.Equal(val.Address, addr) {
+						vals = append(vals, val.PubKey.Bytes())
+					}
+				}
+			}
+			if _, _, err := node.ConsensusState().GetL2Node().DeliverBlock(
 				l2node.ConvertTxsToBytes(block.Data.Txs),
-				block.Data.L2Config,
-				block.Data.ZkConfig,
-				l2node.GetValidators(blockNext.LastCommit),
-				l2node.GetBLSSignatures(blockNext.LastCommit),
+				l2node.Configs{
+					L2Config: block.Data.L2Config,
+					ZKConfig: block.Data.ZkConfig,
+					Root:     block.Data.Root,
+				},
+				l2node.ConsensusData{
+					ValidatorSet:  valset,
+					Validators:    vals,
+					BlsSignatures: l2node.GetBLSSignatures(blockNext.LastCommit),
+				},
 			); err != nil {
 				panic(err)
 			}
 		}
 		block := blockStore.LoadBlock(csHeight)
-		// fmt.Println("============================================================")
-		// fmt.Println("Sync")
-		// fmt.Println(csHeight)
-		// fmt.Println("DeliverBlock")
-		// fmt.Println(hex.EncodeToString(block.Data.L2Config))
-		// fmt.Println(hex.EncodeToString(block.Data.ZkConfig))
-		// fmt.Println("============================================================")
-		if err := node.ConsensusState().GetL2Node().DeliverBlock(
+		var valset [][]byte
+		var vals [][]byte
+		valAddrs := l2node.GetValidators(blockStore.LoadSeenCommit(csHeight))
+		validators, err := stateStore.LoadValidators(csHeight)
+		if err != nil {
+			panic(err)
+		}
+		for _, val := range validators.Validators {
+			valset = append(valset, val.PubKey.Bytes())
+			for _, addr := range valAddrs {
+				if bytes.Equal(val.Address, addr) {
+					vals = append(vals, val.PubKey.Bytes())
+				}
+			}
+		}
+		if _, _, err := node.ConsensusState().GetL2Node().DeliverBlock(
 			l2node.ConvertTxsToBytes(block.Data.Txs),
-			block.Data.L2Config,
-			block.Data.ZkConfig,
-			l2node.GetValidators(blockStore.LoadSeenCommit(csHeight)),
-			l2node.GetBLSSignatures(blockStore.LoadSeenCommit(csHeight)),
+			l2node.Configs{
+				L2Config: block.Data.L2Config,
+				ZKConfig: block.Data.ZkConfig,
+				Root:     block.Data.Root,
+			},
+			l2node.ConsensusData{
+				ValidatorSet:  valset,
+				Validators:    vals,
+				BlsSignatures: l2node.GetBLSSignatures(blockStore.LoadSeenCommit(csHeight)),
+			},
 		); err != nil {
 			panic(err)
 		}

@@ -23,17 +23,13 @@ type L2Node interface {
 		height int64,
 	) (
 		txs [][]byte,
-		l2Config []byte,
-		zkConfig []byte,
-		root []byte,
+		configs Configs,
 		err error,
 	)
 
 	CheckBlockData(
 		txs [][]byte,
-		l2Config []byte,
-		zkConfig []byte,
-		root []byte,
+		configs Configs,
 	) (
 		valid bool,
 		err error,
@@ -41,13 +37,31 @@ type L2Node interface {
 
 	DeliverBlock(
 		txs [][]byte,
-		l2Config []byte,
-		zkConfig []byte,
-		validators []types.Address,
-		blsSignatures [][]byte,
+		configs Configs,
+		consensusData ConsensusData,
 	) (
+		nextBatchParams BatchParams,
+		nextValidatorSet [][]byte,
 		err error,
 	)
+}
+
+type Configs struct {
+	L2Config []byte
+	ZKConfig []byte
+	Root     []byte
+}
+
+type BatchParams struct {
+	BatchBlocksInterval int64
+	BatchMaxBytes       int64
+	BatchTimeout        int64
+}
+
+type ConsensusData struct {
+	ValidatorSet  [][]byte
+	Validators    [][]byte
+	BlsSignatures [][]byte
 }
 
 func ConvertBytesToTxs(txs [][]byte) []types.Tx {
@@ -66,23 +80,15 @@ func ConvertTxsToBytes(txs []types.Tx) [][]byte {
 	return s
 }
 
-func GetValidators(commit *types.Commit) []types.Address {
-	var validators []types.Address
-	// fmt.Println("===========================")
+func GetValidators(commit *types.Commit) (validators []types.Address) {
 	for _, signature := range commit.Signatures {
-		// fmt.Println(len(signature.ValidatorAddress))
-		// TODO return err if len(signature.ValidatorAddress) == 0 {}
 		validators = append(validators, signature.ValidatorAddress)
 	}
 	return validators
 }
 
-func GetBLSSignatures(commit *types.Commit) [][]byte {
-	var blsSignatures [][]byte
-	// fmt.Println("===========================")
+func GetBLSSignatures(commit *types.Commit) (blsSignatures [][]byte) {
 	for _, signature := range commit.Signatures {
-		// fmt.Println(len(signature.BLSSignature))
-		// TODO return err if len(signature.BLSSignature) == 0
 		blsSignatures = append(blsSignatures, signature.BLSSignature)
 	}
 	return blsSignatures

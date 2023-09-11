@@ -2,8 +2,6 @@ package l2node
 
 import (
 	"math/rand"
-
-	"github.com/tendermint/tendermint/types"
 )
 
 var _ L2Node = &MockL2Node{}
@@ -32,11 +30,6 @@ func (l *MockL2Node) RequestHeight(
 	if tmHeight > 10 {
 		height = tmHeight - 2
 	}
-	// fmt.Println("============================================================")
-	// fmt.Println("RequestHeight")
-	// fmt.Println(tmHeight)
-	// fmt.Println(height)
-	// fmt.Println("============================================================")
 	return
 }
 
@@ -56,65 +49,40 @@ func (l *MockL2Node) RequestBlockData(
 	height int64,
 ) (
 	txs [][]byte,
-	l2Config []byte,
-	zkConfig []byte,
-	root []byte,
+	configs Configs,
 	err error,
 ) {
 	for i := int(0); i < l.txNumber; i++ {
 		txs = append(txs, randBytes(10))
 	}
-	l2Config = randBytes(8)
-	zkConfig = randBytes(8)
-	root = randBytes(8)
-	// fmt.Println("============================================================")
-	// fmt.Println("RequestBlockData")
-	// fmt.Println(height)
-	// fmt.Println(txs)
-	// fmt.Println(l2Config)
-	// fmt.Println(zkConfig)
-	// fmt.Println(root)
-	// fmt.Println("============================================================")
+	configs.L2Config = randBytes(8)
+	configs.ZKConfig = randBytes(8)
+	configs.Root = randBytes(8)
 	return
 }
 
 func (l MockL2Node) CheckBlockData(
 	txs [][]byte,
-	l2Config []byte,
-	zkConfig []byte,
-	root []byte,
+	configs Configs,
 ) (
 	valid bool,
 	err error,
 ) {
 	valid = true
-	// fmt.Println("============================================================")
-	// fmt.Println("CheckBlockData")
-	// fmt.Println(txs)
-	// fmt.Println(l2Config)
-	// fmt.Println(zkConfig)
-	// fmt.Println(root)
-	// fmt.Println("============================================================")
 	return
 }
 
 func (l MockL2Node) DeliverBlock(
 	txs [][]byte,
-	l2Config []byte,
-	zkConfig []byte,
-	validators []types.Address,
-	blsSignatures [][]byte,
+	configs Configs,
+	consensusData ConsensusData,
 ) (
+	nextBatchParams BatchParams,
+	nextValidatorSet [][]byte,
 	err error,
 ) {
-	// fmt.Println("============================================================")
-	// fmt.Println("DeliverBlock")
-	// fmt.Println(txs)
-	// fmt.Println(l2Config)
-	// fmt.Println(zkConfig)
-	// fmt.Println(validators)
-	// fmt.Println(blsSignatures)
-	// fmt.Println("============================================================")
+	// TODO nextBatchParams
+	// TODO nextValidatorSet
 	return
 }
 
