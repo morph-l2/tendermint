@@ -1072,10 +1072,6 @@ func (data *Data) ToProto() tmproto.Data {
 	tp.L2Config = data.L2Config
 	tp.ZkConfig = data.ZkConfig
 	tp.Root = data.Root
-	tp.NextValidators = data.NextValidators
-	tp.BatchBlocksInterval = data.BatchBlocksInterval
-	tp.BatchMaxBytes = data.BatchMaxBytes
-	tp.BatchTimeout = data.BatchTimeout
 
 	return *tp
 }
@@ -1101,10 +1097,6 @@ func DataFromProto(dp *tmproto.Data) (Data, error) {
 	data.L2Config = dp.L2Config
 	data.ZkConfig = dp.ZkConfig
 	data.Root = dp.Root
-	data.NextValidators = dp.NextValidators
-	data.BatchBlocksInterval = dp.BatchBlocksInterval
-	data.BatchMaxBytes = dp.BatchMaxBytes
-	data.BatchTimeout = dp.BatchTimeout
 
 	return *data, nil
 }

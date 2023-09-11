@@ -91,12 +91,6 @@ message Data {
   bytes l2_config = 2 [(gogoproto.customname) = "L2Config"];
   bytes zk_config = 3 [(gogoproto.customname) = "ZkConfig"];
   bytes root      = 4 [(gogoproto.customname) = "Root"];
-
-  repeated bytes next_validators = 5 [(gogoproto.customname) = "NextValidators"];
-
-  int64 batch_blocks_interval = 6 [(gogoproto.customname) = "BatchBlocksInterval"];
-  int64 batch_max_bytes       = 7 [(gogoproto.customname) = "BatchMaxBytes"];
-  int64 batch_timeout         = 8 [(gogoproto.customname) = "BatchTimeout"];
 }
 
 // Vote represents a prevote, precommit, or commit vote from validators for
