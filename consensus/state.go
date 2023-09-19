@@ -2105,26 +2105,28 @@ func (cs *State) handleCompleteProposal(blockHeight int64) {
 // Attempt to add the vote. if its a duplicate signature, dupeout the validator
 func (cs *State) tryAddVote(vote *types.Vote, peerID p2p.ID) (bool, error) {
 	// verify bls signature
-	batchStartHeight, batchStartTime := cs.getBatchStart()
-	zkConfigContext, rawBatchTxs, root := cs.batchData(batchStartHeight)
-	batchSizeWithProposalBlock := len(zkConfigContext) + txsSize(rawBatchTxs) + len(cs.ProposalBlock.Data.ZkConfig) + txsSize(cs.proposalBlockRawTxs()) + len(cs.ProposalBlock.Data.Root)
-	if cs.isBatchPoint(
-		batchStartHeight,
-		batchSizeWithProposalBlock,
-		batchStartTime,
-	) {
-		encodedTxs, err := cs.l2Node.EncodeTxs(rawBatchTxs)
-		if err != nil {
-			panic(err)
-		}
-		batchContext := cs.batchContext(zkConfigContext, encodedTxs, root)
-		vaild, err := cs.l2Node.VerifySignature(cs.Validators.Validators[vote.ValidatorIndex].PubKey.Bytes(), batchContext, vote.BLSSignature)
-		if err != nil {
-			cs.Logger.Error(err.Error())
-			return false, err
-		}
-		if !vaild {
-			return false, ErrBLSSignatureInalvid
+	if cs.Height > cs.state.InitialHeight {
+		batchStartHeight, batchStartTime := cs.getBatchStart()
+		zkConfigContext, rawBatchTxs, root := cs.batchData(batchStartHeight)
+		batchSizeWithProposalBlock := len(zkConfigContext) + txsSize(rawBatchTxs) + len(cs.ProposalBlock.Data.ZkConfig) + txsSize(cs.proposalBlockRawTxs()) + len(cs.ProposalBlock.Data.Root)
+		if cs.isBatchPoint(
+			batchStartHeight,
+			batchSizeWithProposalBlock,
+			batchStartTime,
+		) {
+			encodedTxs, err := cs.l2Node.EncodeTxs(rawBatchTxs)
+			if err != nil {
+				panic(err)
+			}
+			batchContext := cs.batchContext(zkConfigContext, encodedTxs, root)
+			vaild, err := cs.l2Node.VerifySignature(cs.Validators.Validators[vote.ValidatorIndex].PubKey.Bytes(), batchContext, vote.BLSSignature)
+			if err != nil {
+				cs.Logger.Error(err.Error())
+				return false, err
+			}
+			if !vaild {
+				return false, ErrBLSSignatureInalvid
+			}
 		}
 	}
 	added, err := cs.addVote(vote, peerID)
