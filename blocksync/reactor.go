@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"time"
 
+	cs "github.com/tendermint/tendermint/consensus"
 	"github.com/tendermint/tendermint/l2node"
 	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/p2p"
@@ -386,8 +387,7 @@ FOR_LOOP:
 			// NOTE: we can probably make this more efficient, but note that calling
 			// first.Hash() doesn't verify the tx contents, so MakePartSet() is
 			// currently necessary.
-			err = state.Validators.VerifyCommitLight(chainID, firstID, first.Height, second.LastCommit)
-			if err == nil {
+			if err = state.Validators.VerifyCommitLight(chainID, firstID, first.Height, second.LastCommit); err == nil {
 				// validate the block before we persist it
 				err = bcR.blockExec.ValidateBlock(state, first)
 			}
@@ -441,6 +441,15 @@ FOR_LOOP:
 				return
 			}
 
+			var batchContext []byte
+			if cs.CheckBLS(second.LastCommit.Signatures) {
+				batchContext = cs.GetBatchContext(
+					bcR.l2Node,
+					bcR.store,
+					bcR.initialState.InitialHeight,
+					first.Height,
+				)
+			}
 			nextBatchParams, nextValidatorSet, err := bcR.l2Node.DeliverBlock(
 				l2node.ConvertTxsToBytes(first.Data.Txs),
 				l2node.Configs{
@@ -452,6 +461,7 @@ FOR_LOOP:
 					ValidatorSet:  valset,
 					Validators:    vals,
 					BlsSignatures: blsSignatures,
+					Message:       batchContext,
 				},
 			)
 			if err != nil {

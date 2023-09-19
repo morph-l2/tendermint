@@ -962,6 +962,7 @@ func NewNode(
 
 			var valset [][]byte
 			var vals [][]byte
+			var batchContext []byte
 			valAddrs := l2node.GetValidators(blockNext.LastCommit)
 			validators, err := stateStore.LoadValidators(h)
 			if err != nil {
@@ -975,6 +976,14 @@ func NewNode(
 					}
 				}
 			}
+			if cs.CheckBLS(blockStore.LoadSeenCommit(i).Signatures) {
+				batchContext = cs.GetBatchContext(
+					l2Node,
+					blockStore,
+					state.InitialHeight,
+					i-1,
+				)
+			}
 			if _, _, err := node.ConsensusState().GetL2Node().DeliverBlock(
 				l2node.ConvertTxsToBytes(block.Data.Txs),
 				l2node.Configs{
@@ -986,6 +995,7 @@ func NewNode(
 					ValidatorSet:  valset,
 					Validators:    vals,
 					BlsSignatures: l2node.GetBLSSignatures(blockNext.LastCommit),
+					Message:       batchContext,
 				},
 			); err != nil {
 				panic(err)
@@ -994,6 +1004,7 @@ func NewNode(
 		block := blockStore.LoadBlock(csHeight)
 		var valset [][]byte
 		var vals [][]byte
+		var batchContext []byte
 		valAddrs := l2node.GetValidators(blockStore.LoadSeenCommit(csHeight))
 		validators, err := stateStore.LoadValidators(csHeight)
 		if err != nil {
@@ -1007,6 +1018,14 @@ func NewNode(
 				}
 			}
 		}
+		if cs.CheckBLS(blockStore.LoadSeenCommit(csHeight).Signatures) {
+			batchContext = cs.GetBatchContext(
+				l2Node,
+				blockStore,
+				state.InitialHeight,
+				csHeight-1,
+			)
+		}
 		if _, _, err := node.ConsensusState().GetL2Node().DeliverBlock(
 			l2node.ConvertTxsToBytes(block.Data.Txs),
 			l2node.Configs{
@@ -1018,6 +1037,7 @@ func NewNode(
 				ValidatorSet:  valset,
 				Validators:    vals,
 				BlsSignatures: l2node.GetBLSSignatures(blockStore.LoadSeenCommit(csHeight)),
+				Message:       batchContext,
 			},
 		); err != nil {
 			panic(err)

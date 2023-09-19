@@ -45,6 +45,15 @@ type L2Node interface {
 		nextValidatorSet [][]byte,
 		err error,
 	)
+
+	VerifySignature(
+		tmKey []byte,
+		message []byte, // should do Keccak256(message) before verify signature
+		signature []byte,
+	) (
+		valid bool,
+		err error,
+	)
 }
 
 type Configs struct {
@@ -57,6 +66,7 @@ type ConsensusData struct {
 	ValidatorSet  [][]byte
 	Validators    [][]byte
 	BlsSignatures [][]byte
+	Message       []byte
 }
 
 func ConvertBytesToTxs(txs [][]byte) []types.Tx {

@@ -81,3 +81,14 @@ func (l MockL2Node) DeliverBlock(
 	nextValidatorSet = consensusData.ValidatorSet
 	return
 }
+
+func (l MockL2Node) VerifySignature(
+	tmKey []byte,
+	message []byte,
+	signature []byte,
+) (
+	valid bool,
+	err error,
+) {
+	return true, nil
+}
