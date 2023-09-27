@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cosmos/gogoproto/proto"
+	ethcrypto "github.com/scroll-tech/go-ethereum/crypto"
 
 	"github.com/tendermint/tendermint/blssignatures"
 	cfg "github.com/tendermint/tendermint/config"
@@ -146,6 +147,12 @@ type State struct {
 
 	// for reporting metrics
 	metrics *Metrics
+
+	// batch checkpoint
+	checkpoint bool
+
+	// batch context hash
+	batchContextHash []byte
 }
 
 // StateOption sets an optional parameter on the State.
@@ -785,7 +792,7 @@ func (cs *State) receiveRoutine(maxSteps int) {
 
 			// handles proposals, block parts, votes
 			// may generate internal events (votes, complete proposals, 2/3 majorities)
-			cs.handleMsg(mi)
+			cs.handleMsg(mi, false)
 
 		case mi = <-cs.internalMsgQueue:
 			err := cs.wal.WriteSync(mi) // NOTE: fsync
@@ -805,7 +812,7 @@ func (cs *State) receiveRoutine(maxSteps int) {
 			}
 
 			// handles proposals, block parts, votes
-			cs.handleMsg(mi)
+			cs.handleMsg(mi, false)
 
 		case ti := <-cs.timeoutTicker.Chan(): // tockChan:
 			if err := cs.wal.Write(ti); err != nil {
@@ -824,7 +831,7 @@ func (cs *State) receiveRoutine(maxSteps int) {
 }
 
 // state transitions on complete-proposal, 2/3-any, 2/3-one
-func (cs *State) handleMsg(mi msgInfo) {
+func (cs *State) handleMsg(mi msgInfo, replay bool) {
 	cs.mtx.Lock()
 	defer cs.mtx.Unlock()
 	var (
@@ -878,7 +885,7 @@ func (cs *State) handleMsg(mi msgInfo) {
 	case *VoteMessage:
 		// attempt to add the vote and dupeout the validator if its a duplicate signature
 		// if the vote gives us a 2/3-any or 2/3-one, we transition
-		added, err = cs.tryAddVote(msg.Vote, peerID)
+		added, err = cs.tryAddVote(msg.Vote, peerID, replay)
 		if added {
 			cs.statsMsgQueue <- mi
 		}
@@ -1265,6 +1272,28 @@ func (cs *State) createProposalBlock() (*types.Block, error) {
 	if err != nil {
 		panic(err)
 	}
+
+	if cs.Height != cs.state.InitialHeight {
+		// save context and checkpoint
+		batchStartHeight, batchStartTime := cs.getBatchStart(ret)
+		zkConfigContext, rawBatchTxs, root := cs.batchData(batchStartHeight)
+		batchSizeWithProposalBlock := len(zkConfigContext) + txsSize(rawBatchTxs) + len(ret.Data.ZkConfig) + txsSize(cs.proposalBlockRawTxs(ret)) + len(ret.Data.Root)
+		cs.checkpoint = false
+		if cs.isBatchPoint(
+			batchStartHeight,
+			batchSizeWithProposalBlock,
+			batchStartTime,
+		) {
+			encodedTxs, err := cs.l2Node.EncodeTxs(rawBatchTxs)
+			if err != nil {
+				panic(err)
+			}
+			batchContext := cs.batchContext(zkConfigContext, encodedTxs, root)
+			cs.batchContextHash = ethcrypto.Keccak256(batchContext)
+			cs.checkpoint = true
+		}
+	}
+
 	return ret, nil
 }
 
@@ -2103,33 +2132,8 @@ func (cs *State) handleCompleteProposal(blockHeight int64) {
 }
 
 // Attempt to add the vote. if its a duplicate signature, dupeout the validator
-func (cs *State) tryAddVote(vote *types.Vote, peerID p2p.ID) (bool, error) {
-	// verify bls signature
-	if cs.Height > cs.state.InitialHeight {
-		batchStartHeight, batchStartTime := cs.getBatchStart()
-		zkConfigContext, rawBatchTxs, root := cs.batchData(batchStartHeight)
-		batchSizeWithProposalBlock := len(zkConfigContext) + txsSize(rawBatchTxs) + len(cs.ProposalBlock.Data.ZkConfig) + txsSize(cs.proposalBlockRawTxs()) + len(cs.ProposalBlock.Data.Root)
-		if cs.isBatchPoint(
-			batchStartHeight,
-			batchSizeWithProposalBlock,
-			batchStartTime,
-		) {
-			encodedTxs, err := cs.l2Node.EncodeTxs(rawBatchTxs)
-			if err != nil {
-				panic(err)
-			}
-			batchContext := cs.batchContext(zkConfigContext, encodedTxs, root)
-			vaild, err := cs.l2Node.VerifySignature(cs.Validators.Validators[vote.ValidatorIndex].PubKey.Bytes(), batchContext, vote.BLSSignature)
-			if err != nil {
-				cs.Logger.Error(err.Error())
-				return false, err
-			}
-			if !vaild {
-				return false, ErrBLSSignatureInalvid
-			}
-		}
-	}
-	added, err := cs.addVote(vote, peerID)
+func (cs *State) tryAddVote(vote *types.Vote, peerID p2p.ID, replay bool) (bool, error) {
+	added, err := cs.addVote(vote, peerID, replay)
 	if err != nil {
 		// If the vote height is off, we'll just ignore it,
 		// But if it's a conflicting sig, add it to the cs.evpool.
@@ -2176,7 +2180,7 @@ func (cs *State) tryAddVote(vote *types.Vote, peerID p2p.ID) (bool, error) {
 	return added, nil
 }
 
-func (cs *State) addVote(vote *types.Vote, peerID p2p.ID) (added bool, err error) {
+func (cs *State) addVote(vote *types.Vote, peerID p2p.ID, replay bool) (added bool, err error) {
 	cs.Logger.Debug(
 		"adding vote",
 		"vote_height", vote.Height,
@@ -2325,6 +2329,24 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID) (added bool, err error
 		}
 
 	case tmproto.PrecommitType:
+		// verify bls signature
+		if cs.isProposer(cs.privValidatorPubKey.Address()) && !replay && cs.ProposalBlock != nil {
+			if cs.checkpoint {
+				if len(vote.BLSSignature) == 0 {
+					return false, ErrBLSSignatureInalvid
+				}
+			} else if len(vote.BLSSignature) != 0 {
+				return false, ErrBLSSignatureInalvid
+			}
+			vaild, err := cs.l2Node.VerifySignature(cs.Validators.Validators[vote.ValidatorIndex].PubKey.Bytes(), cs.batchContextHash, vote.BLSSignature)
+			if err != nil {
+				cs.Logger.Error(err.Error())
+				return false, err
+			}
+			if !vaild {
+				return false, ErrBLSSignatureInalvid
+			}
+		}
 		precommits := cs.Votes.Precommits(vote.Round)
 		cs.Logger.Debug("added vote to precommit",
 			"height", vote.Height,
@@ -2364,7 +2386,10 @@ func (cs *State) signVote(
 	msgType tmproto.SignedMsgType,
 	hash []byte,
 	header types.PartSetHeader,
-) (*types.Vote, error) {
+) (
+	*types.Vote,
+	error,
+) {
 	// Flush the WAL. Otherwise, we may not recompute the same vote to sign,
 	// and the privValidator will refuse to sign anything.
 	if err := cs.wal.FlushAndSync(); err != nil {
@@ -2403,9 +2428,9 @@ func (cs *State) signVote(
 		return vote, nil
 	}
 
-	batchStartHeight, batchStartTime := cs.getBatchStart()
+	batchStartHeight, batchStartTime := cs.getBatchStart(cs.ProposalBlock)
 	zkConfigContext, rawBatchTxs, root := cs.batchData(batchStartHeight)
-	batchSizeWithProposalBlock := len(zkConfigContext) + txsSize(rawBatchTxs) + len(cs.ProposalBlock.Data.ZkConfig) + txsSize(cs.proposalBlockRawTxs()) + len(cs.ProposalBlock.Data.Root)
+	batchSizeWithProposalBlock := len(zkConfigContext) + txsSize(rawBatchTxs) + len(cs.ProposalBlock.Data.ZkConfig) + txsSize(cs.proposalBlockRawTxs(cs.ProposalBlock)) + len(cs.ProposalBlock.Data.Root)
 	if cs.isBatchPoint(
 		batchStartHeight,
 		batchSizeWithProposalBlock,
@@ -2418,7 +2443,7 @@ func (cs *State) signVote(
 		batchContext := cs.batchContext(zkConfigContext, encodedTxs, root)
 		sig, err := blssignatures.SignMessage(
 			*cs.blsPrivKey,
-			cs.batchContextHash(batchContext),
+			ethcrypto.Keccak256(batchContext),
 		)
 		if err != nil {
 			return nil, err

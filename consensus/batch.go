@@ -3,17 +3,15 @@ package consensus
 import (
 	"time"
 
-	ethcrypto "github.com/scroll-tech/go-ethereum/crypto"
-
 	"github.com/tendermint/tendermint/l2node"
 	sm "github.com/tendermint/tendermint/state"
 	"github.com/tendermint/tendermint/types"
 )
 
 // currentHeight should be greater than InitialHeight
-func (cs *State) getBatchStart() (int64, time.Time) {
-	prHeight := cs.ProposalBlock.LastCommit.Height
-	if CheckBLS(cs.ProposalBlock.LastCommit.Signatures) {
+func (cs *State) getBatchStart(proposalBlock *types.Block) (int64, time.Time) {
+	prHeight := cs.Height - 1
+	if CheckBLS(proposalBlock.LastCommit.Signatures) {
 		return prHeight, cs.blockStore.LoadBlock(prHeight).Time
 	}
 	for i := prHeight; ; i-- {
@@ -31,20 +29,20 @@ func (cs *State) getBatchStart() (int64, time.Time) {
 func (cs *State) isBatchPoint(batchStartHeight int64, batchSize int, batchStartTime time.Time) bool {
 	// batch_blocks_interval, batch_max_bytes and batch_timeout can't be all 0
 	// block_interval || max_bytes || timeout
-	return (cs.state.ConsensusParams.Batch.BlocksInterval > 0 && cs.ProposalBlock.Height-batchStartHeight >= cs.state.ConsensusParams.Batch.BlocksInterval) ||
+	return (cs.state.ConsensusParams.Batch.BlocksInterval > 0 && cs.Height-batchStartHeight >= cs.state.ConsensusParams.Batch.BlocksInterval) ||
 		(cs.state.ConsensusParams.Batch.MaxBytes > 0 && batchSize >= int(cs.state.ConsensusParams.Batch.MaxBytes)) ||
-		(cs.state.ConsensusParams.Batch.Timeout > 0 && cs.ProposalBlock.Time.Sub(batchStartTime) >= cs.state.ConsensusParams.Batch.Timeout)
+		(cs.state.ConsensusParams.Batch.Timeout > 0 && cs.StartTime.Sub(batchStartTime) >= cs.state.ConsensusParams.Batch.Timeout)
 }
 
 func (cs *State) batchData(batchStartHeight int64) (zkConfigContext []byte, rawBatchTxs [][]byte, root []byte) {
-	for i := batchStartHeight; i < cs.ProposalBlock.Height; i++ {
+	for i := batchStartHeight; i < cs.Height; i++ {
 		block := cs.blockStore.LoadBlock(i)
 		zkConfigContext = append(zkConfigContext, block.Data.ZkConfig...)
 		for _, tx := range block.Data.Txs {
 			rawBatchTxs = append(rawBatchTxs, tx)
 		}
 	}
-	root = cs.blockStore.LoadBlock(cs.ProposalBlock.Height - 1).Data.Root
+	root = cs.blockStore.LoadBlock(cs.Height - 1).Data.Root
 	return
 }
 
@@ -52,12 +50,8 @@ func (cs *State) batchContext(zkConfigContext []byte, encodedTxs []byte, root []
 	return append(append(zkConfigContext, encodedTxs...), root...)
 }
 
-func (cs *State) batchContextHash(batchContext []byte) []byte {
-	return ethcrypto.Keccak256(batchContext)
-}
-
-func (cs *State) proposalBlockRawTxs() (rawTxs [][]byte) {
-	for _, tx := range cs.ProposalBlock.Data.Txs {
+func (cs *State) proposalBlockRawTxs(proposalBlock *types.Block) (rawTxs [][]byte) {
+	for _, tx := range proposalBlock.Data.Txs {
 		rawTxs = append(rawTxs, tx)
 	}
 	return

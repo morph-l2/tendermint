@@ -48,7 +48,7 @@ type L2Node interface {
 
 	VerifySignature(
 		tmKey []byte,
-		message []byte, // should do Keccak256(message) before verify signature
+		message []byte, // batch context hash
 		signature []byte,
 	) (
 		valid bool,
@@ -66,7 +66,7 @@ type ConsensusData struct {
 	ValidatorSet  [][]byte
 	Validators    [][]byte
 	BlsSignatures [][]byte
-	Message       []byte
+	Message       []byte // batch context hash
 }
 
 func ConvertBytesToTxs(txs [][]byte) []types.Tx {

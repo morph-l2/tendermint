@@ -241,7 +241,10 @@ func (voteSet *VoteSet) addVerifiedVote(
 	vote *Vote,
 	blockKey string,
 	votingPower int64,
-) (added bool, conflicting *Vote) {
+) (
+	added bool,
+	conflicting *Vote,
+) {
 	valIndex := vote.ValidatorIndex
 
 	// Already exists in voteSet.votes?
