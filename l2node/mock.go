@@ -83,7 +83,6 @@ func (l MockL2Node) DeliverBlock(
 }
 
 func (l MockL2Node) VerifySignature(
-	checkpoint bool,
 	tmKey []byte,
 	message []byte,
 	signature []byte,

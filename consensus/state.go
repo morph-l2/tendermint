@@ -2336,15 +2336,15 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID, replay bool) (added bo
 				if len(vote.BLSSignature) == 0 {
 					return false, ErrBLSSignatureInalvid
 				}
+				vaild, err := cs.l2Node.VerifySignature(cs.Validators.Validators[vote.ValidatorIndex].PubKey.Bytes(), cs.batchContextHash, vote.BLSSignature)
+				if err != nil {
+					cs.Logger.Error(err.Error())
+					return false, err
+				}
+				if !vaild {
+					return false, ErrBLSSignatureInalvid
+				}
 			} else if len(vote.BLSSignature) != 0 {
-				return false, ErrBLSSignatureInalvid
-			}
-			vaild, err := cs.l2Node.VerifySignature(cs.checkpoint, cs.Validators.Validators[vote.ValidatorIndex].PubKey.Bytes(), cs.batchContextHash, vote.BLSSignature)
-			if err != nil {
-				cs.Logger.Error(err.Error())
-				return false, err
-			}
-			if !vaild {
 				return false, ErrBLSSignatureInalvid
 			}
 		}
