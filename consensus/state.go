@@ -1279,6 +1279,7 @@ func (cs *State) createProposalBlock() (*types.Block, error) {
 		zkConfigContext, rawBatchTxs, root := cs.batchData(batchStartHeight)
 		batchSizeWithProposalBlock := len(zkConfigContext) + txsSize(rawBatchTxs) + len(ret.Data.ZkConfig) + txsSize(cs.proposalBlockRawTxs(ret)) + len(ret.Data.Root)
 		cs.checkpoint = false
+		cs.batchContextHash = nil
 		if cs.isBatchPoint(
 			batchStartHeight,
 			batchSizeWithProposalBlock,
@@ -2338,7 +2339,7 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID, replay bool) (added bo
 			} else if len(vote.BLSSignature) != 0 {
 				return false, ErrBLSSignatureInalvid
 			}
-			vaild, err := cs.l2Node.VerifySignature(cs.Validators.Validators[vote.ValidatorIndex].PubKey.Bytes(), cs.batchContextHash, vote.BLSSignature)
+			vaild, err := cs.l2Node.VerifySignature(cs.checkpoint, cs.Validators.Validators[vote.ValidatorIndex].PubKey.Bytes(), cs.batchContextHash, vote.BLSSignature)
 			if err != nil {
 				cs.Logger.Error(err.Error())
 				return false, err

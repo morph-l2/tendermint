@@ -47,6 +47,7 @@ type L2Node interface {
 	)
 
 	VerifySignature(
+		checkpoint bool,
 		tmKey []byte,
 		message []byte, // batch context hash
 		signature []byte,
