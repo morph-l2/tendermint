@@ -147,12 +147,6 @@ type State struct {
 
 	// for reporting metrics
 	metrics *Metrics
-
-	// batch checkpoint
-	checkpoint bool
-
-	// batch context hash
-	batchContextHash []byte
 }
 
 // StateOption sets an optional parameter on the State.
@@ -1273,13 +1267,15 @@ func (cs *State) createProposalBlock() (*types.Block, error) {
 		panic(err)
 	}
 
+	return ret, nil
+}
+
+func (cs *State) checkBatchpoint(block *types.Block) (batchpoint bool, batchContextHash []byte) {
 	if cs.Height != cs.state.InitialHeight {
 		// save context and checkpoint
-		batchStartHeight, batchStartTime := cs.getBatchStart(ret)
+		batchStartHeight, batchStartTime := cs.getBatchStart(block)
 		zkConfigContext, rawBatchTxs, root := cs.batchData(batchStartHeight)
-		batchSizeWithProposalBlock := len(zkConfigContext) + txsSize(rawBatchTxs) + len(ret.Data.ZkConfig) + txsSize(cs.proposalBlockRawTxs(ret)) + len(ret.Data.Root)
-		cs.checkpoint = false
-		cs.batchContextHash = nil
+		batchSizeWithProposalBlock := len(zkConfigContext) + txsSize(rawBatchTxs) + len(block.Data.ZkConfig) + txsSize(cs.proposalBlockRawTxs(block)) + len(block.Data.Root)
 		if cs.isBatchPoint(
 			batchStartHeight,
 			batchSizeWithProposalBlock,
@@ -1290,12 +1286,11 @@ func (cs *State) createProposalBlock() (*types.Block, error) {
 				panic(err)
 			}
 			batchContext := cs.batchContext(zkConfigContext, encodedTxs, root)
-			cs.batchContextHash = ethcrypto.Keccak256(batchContext)
-			cs.checkpoint = true
+			batchContextHash = ethcrypto.Keccak256(batchContext)
+			batchpoint = true
 		}
 	}
-
-	return ret, nil
+	return
 }
 
 // Enter: `timeoutPropose` after entering Propose.
@@ -2331,30 +2326,36 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID, replay bool) (added bo
 
 	case tmproto.PrecommitType:
 		// verify bls signature
-		if cs.isProposer(cs.privValidatorPubKey.Address()) && !replay && cs.ProposalBlock != nil {
-			if cs.checkpoint {
+		if !replay && cs.ProposalBlock != nil {
+			batchpoint, batchContextHash := cs.checkBatchpoint(cs.ProposalBlock)
+			if batchpoint {
 				if len(vote.BLSSignature) == 0 {
+					cs.Logger.Error("batchpoint without BLSSignature")
 					return false, ErrBLSSignatureInalvid
 				}
-				vaild, err := cs.l2Node.VerifySignature(cs.Validators.Validators[vote.ValidatorIndex].PubKey.Bytes(), cs.batchContextHash, vote.BLSSignature)
+				vaild, err := cs.l2Node.VerifySignature(cs.Validators.Validators[vote.ValidatorIndex].PubKey.Bytes(), batchContextHash, vote.BLSSignature)
 				if err != nil {
 					cs.Logger.Error(err.Error())
 					return false, err
 				}
 				if !vaild {
+					cs.Logger.Error("fake BLSSignature")
 					return false, ErrBLSSignatureInalvid
 				}
 			} else if len(vote.BLSSignature) != 0 {
+				cs.Logger.Error("BLSSignature that should not exist")
 				return false, ErrBLSSignatureInalvid
 			}
 		}
 		precommits := cs.Votes.Precommits(vote.Round)
-		cs.Logger.Debug("added vote to precommit",
+		cs.Logger.Debug(
+			"added vote to precommit",
 			"height", vote.Height,
 			"round", vote.Round,
 			"validator", vote.ValidatorAddress.String(),
 			"vote_timestamp", vote.Timestamp,
-			"data", precommits.LogString())
+			"data", precommits.LogString(),
+		)
 
 		blockID, ok := precommits.TwoThirdsMajority()
 		if ok {
