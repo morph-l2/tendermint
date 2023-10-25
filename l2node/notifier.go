@@ -1,8 +1,10 @@
 package l2node
 
 import (
-	"fmt"
+	"sync"
 	"time"
+
+	"github.com/tendermint/tendermint/libs/log"
 )
 
 type BlockData struct {
@@ -17,13 +19,18 @@ type Notifier struct {
 	txsAvailable chan struct{}
 	blockData    *BlockData
 	l2Node       L2Node
+
+	wg     sync.WaitGroup
+	logger log.Logger
 }
 
-func NewNotifier(l2Node L2Node) *Notifier {
+func NewNotifier(l2Node L2Node, logger log.Logger) *Notifier {
 	return &Notifier{
 		txsAvailable: make(chan struct{}, 1),
 		blockData:    nil,
 		l2Node:       l2Node,
+		wg:           sync.WaitGroup{},
+		logger:       logger,
 	}
 }
 
@@ -32,12 +39,14 @@ func (n *Notifier) TxsAvailable() <-chan struct{} {
 }
 
 func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time.Duration) {
+	n.wg.Add(1)
 	if createEmptyBlocksInterval == 0 {
 		go func() {
+			defer n.wg.Done()
 			for {
 				txs, configs, err := n.l2Node.RequestBlockData(height)
 				if err != nil {
-					fmt.Println("ERROR:", err.Error())
+					n.logger.Error("failed to call l2Node.RequestBlockData", "err", err)
 					return
 				}
 				if len(txs) > 0 {
@@ -57,6 +66,7 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 	} else {
 		timeout := time.After(createEmptyBlocksInterval)
 		go func() {
+			defer n.wg.Done()
 			for {
 				select {
 				case <-timeout:
@@ -64,7 +74,7 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 				default:
 					txs, configs, err := n.l2Node.RequestBlockData(height)
 					if err != nil {
-						fmt.Println("ERROR:", err.Error())
+						n.logger.Error("failed to call l2Node.RequestBlockData", "err", err)
 						return
 					}
 					if len(txs) > 0 {
@@ -86,6 +96,11 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 }
 
 func (n *Notifier) GetBlockData() *BlockData {
+	return n.blockData
+}
+
+func (n *Notifier) WaitForBlockDataFilledWithTxs() *BlockData {
+	n.wg.Wait()
 	return n.blockData
 }
 
