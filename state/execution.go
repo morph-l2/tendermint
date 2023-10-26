@@ -121,7 +121,7 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 	var configs l2node.Configs
 	var err error
 	if config.WaitForTxs() {
-		blockData := blockExec.notifier.WaitForBlockDataFilledWithTxs()
+		blockData := blockExec.notifier.WaitForBlockData()
 		if blockData != nil && blockData.Height == height {
 			txs = blockData.Txs
 			configs = l2node.Configs{
@@ -130,7 +130,7 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 				Root:     blockData.Root,
 			}
 		} else {
-			txs, configs, err = l2Node.RequestBlockData(height)
+			txs, configs, _, err = l2Node.RequestBlockData(height)
 			if err != nil {
 				// return nil, err
 				panic(err)
@@ -138,7 +138,7 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 		}
 		blockExec.notifier.CleanBlockData()
 	} else {
-		txs, configs, err = l2Node.RequestBlockData(height)
+		txs, configs, _, err = l2Node.RequestBlockData(height)
 		if err != nil {
 			// return nil, err
 			panic(err)

@@ -47,6 +47,7 @@ func (l MockL2Node) RequestBlockData(
 ) (
 	txs [][]byte,
 	configs Configs,
+	collectedL1Msgs bool,
 	err error,
 ) {
 	for i := int(0); i < l.TxNumber; i++ {
