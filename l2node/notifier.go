@@ -44,12 +44,12 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 		go func() {
 			defer n.wg.Done()
 			for {
-				txs, configs, err := n.l2Node.RequestBlockData(height)
+				txs, configs, collectedL1Msgs, err := n.l2Node.RequestBlockData(height)
 				if err != nil {
 					n.logger.Error("failed to call l2Node.RequestBlockData", "err", err)
 					return
 				}
-				if len(txs) > 0 {
+				if len(txs) > 0 || collectedL1Msgs {
 					n.blockData = &BlockData{
 						Height:   height,
 						Txs:      txs,
@@ -72,12 +72,12 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 				case <-timeout:
 					return
 				default:
-					txs, configs, err := n.l2Node.RequestBlockData(height)
+					txs, configs, collectedL1Msgs, err := n.l2Node.RequestBlockData(height)
 					if err != nil {
 						n.logger.Error("failed to call l2Node.RequestBlockData", "err", err)
 						return
 					}
-					if len(txs) > 0 {
+					if len(txs) > 0 || collectedL1Msgs {
 						n.blockData = &BlockData{
 							Height:   height,
 							Txs:      txs,
@@ -99,7 +99,7 @@ func (n *Notifier) GetBlockData() *BlockData {
 	return n.blockData
 }
 
-func (n *Notifier) WaitForBlockDataFilledWithTxs() *BlockData {
+func (n *Notifier) WaitForBlockData() *BlockData {
 	n.wg.Wait()
 	return n.blockData
 }

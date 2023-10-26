@@ -25,6 +25,7 @@ type L2Node interface {
 	) (
 		txs [][]byte,
 		configs Configs,
+		collectedL1Msgs bool,
 		err error,
 	)
 
