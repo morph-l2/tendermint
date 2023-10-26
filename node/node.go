@@ -813,7 +813,7 @@ func NewNode(
 
 	logNodeStartupInfo(state, pubKey, logger, consensusLogger)
 
-	notifier := l2node.NewNotifier(l2Node)
+	notifier := l2node.NewNotifier(l2Node, consensusLogger)
 
 	// Make Evidence Reactor
 	evidenceReactor, evidencePool, err := createEvidenceReactor(config, dbProvider, stateDB, blockStore, logger)
