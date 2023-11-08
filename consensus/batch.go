@@ -26,12 +26,12 @@ func (cs *State) getBatchStart(proposalBlock *types.Block) (int64, time.Time) {
 	}
 }
 
-func (cs *State) isBatchPoint(batchStartHeight int64, batchSize int, batchStartTime time.Time) bool {
+func (cs *State) isBatchPoint(batchStartHeight int64, batchSize int, batchStartTime time.Time, blockTime time.Time) bool {
 	// batch_blocks_interval, batch_max_bytes and batch_timeout can't be all 0
 	// block_interval || max_bytes || timeout
 	return (cs.state.ConsensusParams.Batch.BlocksInterval > 0 && cs.Height-batchStartHeight >= cs.state.ConsensusParams.Batch.BlocksInterval) ||
 		(cs.state.ConsensusParams.Batch.MaxBytes > 0 && batchSize >= int(cs.state.ConsensusParams.Batch.MaxBytes)) ||
-		(cs.state.ConsensusParams.Batch.Timeout > 0 && cs.StartTime.Sub(batchStartTime) >= cs.state.ConsensusParams.Batch.Timeout)
+		(cs.state.ConsensusParams.Batch.Timeout > 0 && blockTime.Sub(batchStartTime) >= cs.state.ConsensusParams.Batch.Timeout)
 }
 
 func (cs *State) batchData(batchStartHeight int64) (zkConfigContext []byte, rawBatchTxs [][]byte, root []byte) {

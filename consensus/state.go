@@ -1280,6 +1280,7 @@ func (cs *State) checkBatchpoint(block *types.Block) (batchpoint bool, batchCont
 			batchStartHeight,
 			batchSizeWithProposalBlock,
 			batchStartTime,
+			block.Time,
 		) {
 			encodedTxs, err := cs.l2Node.EncodeTxs(rawBatchTxs)
 			if err != nil {
@@ -2437,6 +2438,7 @@ func (cs *State) signVote(
 		batchStartHeight,
 		batchSizeWithProposalBlock,
 		batchStartTime,
+		cs.ProposalBlock.Time,
 	) {
 		encodedTxs, err := cs.l2Node.EncodeTxs(rawBatchTxs)
 		if err != nil {
