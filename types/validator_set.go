@@ -288,7 +288,7 @@ func (vals *ValidatorSet) GetByIndex(index int32) (address []byte, val *Validato
 
 func (vals *ValidatorSet) GetPubKeyBytesList() (pkBytesList [][]byte) {
 	for _, val := range vals.Validators {
-		pkBytesList = append(pkBytesList, val.Bytes())
+		pkBytesList = append(pkBytesList, val.PubKey.Bytes())
 	}
 	return
 }
