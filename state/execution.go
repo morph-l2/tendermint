@@ -142,7 +142,7 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 		}
 	}
 
-	block := state.MakeBlock(height, l2node.ConvertBytesToTxs(txs), blockMeta, commit, evidence, proposerAddr, decideBatchPoint)
+	block := state.MakeBlock(height, l2node.ConvertBytesToTxs(txs), blockMeta, commit, evidence, proposerAddr, nil) // set 'decideBatchPoint' to nil here to prevent duplicated execution.
 
 	localLastCommit := buildLastCommitInfo(block, blockExec.store, state.InitialHeight)
 	rpp, err := blockExec.proxyApp.PrepareProposalSync(

@@ -81,10 +81,6 @@ func (b *Block) ValidateBasic() error {
 
 	// NOTE: b.Data.Txs may be nil, but b.Data.Hash() still works fine.
 	if !bytes.Equal(b.DataHash, b.Data.Hash()) {
-		fmt.Println()
-		fmt.Printf("===============b.Data.L2BlockMeta: %x \n", b.Data.L2BlockMeta)
-		fmt.Printf("===============b.Data.L2BatchHeader: %x \n", b.Data.L2BatchHeader)
-		fmt.Println()
 		return fmt.Errorf(
 			"wrong Header.DataHash. Expected %v, got %v",
 			b.Data.Hash(),

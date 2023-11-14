@@ -1296,18 +1296,25 @@ func (cs *State) decideBatchPoint(l2BlockMeta tmbytes.HexBytes, txs types.Txs, b
 			// cs.getBatchStart promised we have batch data cached in cs.batchCache
 			parentBatchHeader = cs.batchCache.ParentBatchHeader
 			historicBlocks := cs.batchCache.BlocksSinceLastBatchPoint
-			fmt.Printf("======>historicBlocks: %d \n", len(historicBlocks))
 			for _, hb := range historicBlocks {
 				blocksMeta = append(blocksMeta, hb.L2BlockMeta)
 				transactions = append(transactions, hb.Txs)
 			}
+			cs.Logger.Info("fetching blocks since last batch point", "lastBatchPoint", batchStartHeight, "blockCount", len(historicBlocks))
 			return
 		})
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("=============>decideBatchPoint, block height: %d, batchStartHeight: %d, blockTime: %d, batchStartTime: %d, batchSize: %d \n", blockHeight, batchStartHeight, blockTime, batchStartTime, batchSize)
-	fmt.Printf("=============>batch params, BlocksInterval: %d, Timeout: %d, MaxBytes: %d \n", cs.state.ConsensusParams.Batch.BlocksInterval, cs.state.ConsensusParams.Batch.Timeout, cs.state.ConsensusParams.Batch.MaxBytes)
+	cs.Logger.Info("decideBatchPoint",
+		"currentBlockHeight", blockHeight,
+		"batchStartHeight", batchStartHeight,
+		"currentBlockTime", blockTime.String(),
+		"batchStartTime", batchStartTime.String(),
+		"batchSize", batchSize,
+		"blocksIntervalParam", cs.state.ConsensusParams.Batch.BlocksInterval,
+		"TimeoutParam", cs.state.ConsensusParams.Batch.Timeout,
+		"MaxBytesParam", cs.state.ConsensusParams.Batch.MaxBytes)
 	if (cs.state.ConsensusParams.Batch.BlocksInterval > 0 && blockHeight-batchStartHeight >= cs.state.ConsensusParams.Batch.BlocksInterval) ||
 		(cs.state.ConsensusParams.Batch.Timeout > 0 && blockTime.Sub(batchStartTime) >= cs.state.ConsensusParams.Batch.Timeout) ||
 		(cs.state.ConsensusParams.Batch.MaxBytes > 0 && batchSize >= cs.state.ConsensusParams.Batch.MaxBytes) {
@@ -1891,9 +1898,9 @@ func (cs *State) finalizeCommit(height int64) {
 
 	if cs.batchCache != nil {
 		cs.batchCache.ClearBatchData()
-		if len(block.BatchHash) > 0 { // batch point
-			fmt.Printf("===========>start to UpdateStartPoint, block batchHash: %x \n", block.BatchHash)
+		if block.IsBatchPoint() { // batch point
 			cs.batchCache.UpdateStartPoint(block)
+			cs.Logger.Debug("updated start point", "blockHeight", block.Height, "batchHash", block.BatchHash)
 		} else {
 			cs.batchCache.AppendBlock(block)
 		}

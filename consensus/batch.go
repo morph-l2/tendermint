@@ -1,13 +1,13 @@
 package consensus
 
 import (
-	"fmt"
 	"github.com/tendermint/tendermint/crypto/tmhash"
 	"time"
 
 	"github.com/tendermint/tendermint/types"
 )
 
+// batchData is used to store the cached batchHash/batchHeader mapping to blockHash, preventing duplicated calculation
 type batchData struct {
 	batchHash   []byte
 	batchHeader []byte
@@ -95,49 +95,4 @@ func (cs *State) getBatchStart() (int64, time.Time) {
 	}
 
 	return cs.batchCache.BatchStartHeight, cs.batchCache.BatchStartTime
-}
-
-// currentHeight should be greater than InitialHeight
-func (cs *State) getBatchStart2(proposalBlock *types.Block) (int64, time.Time) {
-	if cs.batchCache != nil && cs.batchCache.BatchStartHeight != 0 {
-		return cs.batchCache.BatchStartHeight, cs.batchCache.BatchStartTime
-	}
-
-	if cs.batchCache == nil {
-		cs.batchCache = NewBatchCache()
-	}
-	prHeight := cs.Height - 1
-	if CheckBLS(proposalBlock.LastCommit.Signatures) {
-		lastBatchPointBlock := cs.blockStore.LoadBlock(prHeight)
-		fmt.Printf("===========>start to UpdateStartPoint, step 1: %x \n", lastBatchPointBlock.BatchHash)
-		cs.batchCache.UpdateStartPoint(lastBatchPointBlock)
-		return lastBatchPointBlock.Height, lastBatchPointBlock.Time
-	}
-	for i := prHeight; ; i-- {
-		if i == cs.state.InitialHeight {
-			lastBatchPointBlock := cs.blockStore.LoadBlock(i)
-			fmt.Printf("===========>start to UpdateStartPoint, step 2. batchPoint height: %d \n", lastBatchPointBlock.Height)
-			cs.batchCache.UpdateStartPoint(lastBatchPointBlock)
-			return lastBatchPointBlock.Height, lastBatchPointBlock.Time
-		}
-
-		block := cs.blockStore.LoadBlock(i)
-		cs.batchCache.AppendBlock(block)
-		if CheckBLS(block.LastCommit.Signatures) {
-			preBlock := cs.blockStore.LoadBlock(i - 1)
-			fmt.Printf("===========>start to UpdateStartPoint, step 3. batchPoint height: %d \n", preBlock.Height)
-			cs.batchCache.UpdateStartPoint(preBlock)
-			cs.batchCache.AppendBlock(preBlock)
-			return preBlock.Height, preBlock.Time
-		}
-	}
-}
-
-func CheckBLS(signatures []types.CommitSig) bool {
-	for _, sig := range signatures {
-		if len(sig.BLSSignature) > 0 {
-			return true
-		}
-	}
-	return false
 }
