@@ -1327,9 +1327,6 @@ func (cs *State) decideBatchPoint(l2BlockMeta tmbytes.HexBytes, txs types.Txs, b
 }
 
 func (cs *State) decideBatchPointWithProposedBlock(block *types.Block) (batchHash []byte, batchHeader []byte) {
-	if cs.Height == cs.state.InitialHeight {
-		return
-	}
 	if cs.batchCache != nil {
 		getBatchData, found := cs.batchCache.batchData(block.Hash())
 		if found {
