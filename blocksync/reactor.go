@@ -2,11 +2,11 @@ package blocksync
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
 
-	cs "github.com/tendermint/tendermint/consensus"
 	"github.com/tendermint/tendermint/l2node"
 	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/p2p"
@@ -382,7 +382,7 @@ FOR_LOOP:
 				break FOR_LOOP
 			}
 			firstPartSetHeader := firstParts.Header()
-			firstID := types.BlockID{Hash: first.Hash(), PartSetHeader: firstPartSetHeader}
+			firstID := types.BlockID{Hash: first.Hash(), BatchHash: first.BatchHash, PartSetHeader: firstPartSetHeader}
 			// Finally, verify the first block using the second's commit
 			// NOTE: we can probably make this more efficient, but note that calling
 			// first.Hash() doesn't verify the tx contents, so MakePartSet() is
@@ -391,6 +391,60 @@ FOR_LOOP:
 				// validate the block before we persist it
 				err = bcR.blockExec.ValidateBlock(state, first)
 			}
+
+			// make sure the block has valid batchHash and batchHeader, and has the enough valid BLS signatures if it is a batch point
+			var (
+				blsSigners, blsSigs [][]byte
+				votingPowers        []int64
+			)
+			if err == nil {
+				err = func() error {
+					// check the correctness of the relation of batchHash and batchHeader
+					if len(first.L2BatchHeader) > 0 {
+						batchHash, hashErr := bcR.l2Node.BatchHash(first.L2BatchHeader)
+						if hashErr != nil {
+							return hashErr
+						}
+						if !bytes.Equal(first.BatchHash, batchHash) {
+							return fmt.Errorf("wrong batchHash. expectedHash: %x, actualHash: %x, batchHeader: %x", batchHash, first.BatchHash, first.L2BatchHeader)
+						}
+					} else if len(first.BatchHash) > 0 {
+						return errors.New("batch hash can not exist when batchHeader is empty")
+					}
+
+					blsSigners, blsSigs, votingPowers, err = l2node.GetBLSData(second.LastCommit, state.Validators)
+					if err != nil {
+						return err
+					}
+					if len(blsSigners) != len(blsSigs) || len(blsSigners) != len(votingPowers) {
+						return errors.New("inconsistent length between blsSigners and blsSigs and votingPowers")
+					}
+
+					var validVotingPowers int64
+					if len(blsSigs) > 0 {
+						if len(first.BatchHash) == 0 {
+							return errors.New("should not have bls signatures when batchHash is empty")
+						}
+						for i, blsSig := range blsSigs {
+							valid, err := bcR.l2Node.VerifySignature(blsSigners[i], first.BatchHash, blsSig)
+							if err != nil {
+								return err
+							}
+							if valid {
+								validVotingPowers += votingPowers[i]
+							}
+						}
+						quorum := state.Validators.TotalVotingPower()*2/3 + 1
+						if validVotingPowers < quorum {
+							return fmt.Errorf("not enough votingPowers of valid bls signature. quorum: %d, valid votingPower: %d", quorum, validVotingPowers)
+						}
+					} else if len(first.BatchHash) > 0 {
+						return errors.New("must have bls signatures when batchHash is not empty")
+					}
+					return nil
+				}()
+			}
+
 			if err != nil {
 				bcR.Logger.Error("Error in validation", "err", err)
 				peerID := bcR.pool.RedoRequest(first.Height)
@@ -415,53 +469,14 @@ FOR_LOOP:
 			// TODO: batch saves so we dont persist to disk every block
 			bcR.store.SaveBlock(first, firstParts, second.LastCommit)
 
-			// TODO: only for test
-			if len(first.Data.L2Config) == 0 || len(first.Data.ZkConfig) == 0 || len(first.Data.Root) == 0 {
-				panic("error1: nil config")
-			}
-			if len(l2node.GetValidators(second.LastCommit)) == 0 || len(l2node.GetBLSSignatures(second.LastCommit)) == 0 {
-				panic("error1: nil sig or val")
-			}
-
-			var valset [][]byte
-			var vals [][]byte
-			valAddrs := l2node.GetValidators(second.LastCommit)
-			for _, val := range state.Validators.Validators {
-				valset = append(valset, val.PubKey.Bytes())
-				for _, addr := range valAddrs {
-					if bytes.Equal(val.Address, addr) {
-						vals = append(vals, val.PubKey.Bytes())
-					}
-				}
-			}
-
-			blsSignatures := l2node.GetBLSSignatures(second.LastCommit)
-			if len(valAddrs) == 0 || len(blsSignatures) == 0 {
-				bcR.Logger.Error("nil sig or val")
-				return
-			}
-
-			var batchContext []byte
-			if cs.CheckBLS(second.LastCommit.Signatures) {
-				batchContext = cs.GetBatchContext(
-					bcR.l2Node,
-					bcR.store,
-					bcR.initialState.InitialHeight,
-					first.Height,
-				)
-			}
+			valPkBytesList := state.Validators.GetPubKeyBytesList()
 			nextBatchParams, nextValidatorSet, err := bcR.l2Node.DeliverBlock(
 				l2node.ConvertTxsToBytes(first.Data.Txs),
-				l2node.Configs{
-					L2Config: first.Data.L2Config,
-					ZKConfig: first.Data.ZkConfig,
-					Root:     first.Data.Root,
-				},
+				first.Data.L2BlockMeta,
 				l2node.ConsensusData{
-					ValidatorSet:  valset,
-					Validators:    vals,
-					BlsSignatures: blsSignatures,
-					Message:       batchContext,
+					ValidatorSet:  valPkBytesList,
+					BlsSigners:    blsSigners,
+					BlsSignatures: blsSigs,
 				},
 			)
 			if err != nil {
@@ -475,7 +490,7 @@ FOR_LOOP:
 				firstID,
 				first,
 				bcR.blockExec.GetConsensusParamsUpdate(nextBatchParams, nil, nil, nil, nil),
-				bcR.blockExec.GetValidatorUpdates(nextValidatorSet, valset),
+				bcR.blockExec.GetValidatorUpdates(nextValidatorSet, valPkBytesList),
 			)
 			if err != nil {
 				// TODO This is bad, are we zombie?

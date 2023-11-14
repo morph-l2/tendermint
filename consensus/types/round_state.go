@@ -190,7 +190,7 @@ func (rs *RoundState) StringIndented(indent string) string {
 %s  H:%v R:%v S:%v
 %s  StartTime:     %v
 %s  CommitTime:    %v
-%s  Validators:    %v
+%s  BlsSigners:    %v
 %s  Proposal:      %v
 %s  ProposalBlock: %v %v
 %s  LockedRound:   %v

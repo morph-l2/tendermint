@@ -1,11 +1,13 @@
 package l2node
 
 import (
+	"fmt"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/types"
 )
 
 type L2Node interface {
+	Batcher
 	RequestHeight(
 		tmHeight int64,
 	) (
@@ -24,14 +26,14 @@ type L2Node interface {
 		height int64,
 	) (
 		txs [][]byte,
-		configs Configs,
+		blockMeta []byte,
 		collectedL1Msgs bool,
 		err error,
 	)
 
 	CheckBlockData(
 		txs [][]byte,
-		configs Configs,
+		blockMeta []byte,
 	) (
 		valid bool,
 		err error,
@@ -39,7 +41,7 @@ type L2Node interface {
 
 	DeliverBlock(
 		txs [][]byte,
-		configs Configs,
+		blockMeta []byte,
 		consensusData ConsensusData,
 	) (
 		nextBatchParams *tmproto.BatchParams, // set nil if no update
@@ -57,6 +59,36 @@ type L2Node interface {
 	)
 }
 
+// Batcher is used to pack the blocks into a batch, and commit the batch if it is determined to be a batchPoint.
+type Batcher interface {
+	CalculateBatchSizeWithProposalBlock(
+		proposalBlockBytes []byte,
+		proposalTxs types.Txs,
+		get GetFromBatchStartFunc,
+	) (
+		batchSize int64,
+		err error,
+	)
+
+	SealBatch() (
+		batchHash []byte,
+		batchHeader []byte,
+		err error,
+	)
+
+	CommitBatch() error
+
+	PackCurrentBlock() error
+
+	BatchHash(batchHeader []byte) ([]byte, error)
+}
+type GetFromBatchStartFunc func() (
+	parentBatchHeader []byte,
+	blockMetas [][]byte,
+	transactions []types.Txs,
+	err error,
+)
+
 type Configs struct {
 	L2Config []byte
 	ZKConfig []byte
@@ -65,9 +97,8 @@ type Configs struct {
 
 type ConsensusData struct {
 	ValidatorSet  [][]byte
-	Validators    [][]byte
+	BlsSigners    [][]byte
 	BlsSignatures [][]byte
-	Message       []byte // batch context hash
 }
 
 func ConvertBytesToTxs(txs [][]byte) []types.Tx {
@@ -86,16 +117,36 @@ func ConvertTxsToBytes(txs []types.Tx) [][]byte {
 	return s
 }
 
-func GetValidators(commit *types.Commit) (validators []types.Address) {
+func GetBlsSigners(commit *types.Commit) (blsSigners []types.Address) {
 	for _, signature := range commit.Signatures {
-		validators = append(validators, signature.ValidatorAddress)
+		if len(signature.BLSSignature) > 0 {
+			blsSigners = append(blsSigners, signature.ValidatorAddress)
+		}
 	}
-	return validators
+	return blsSigners
 }
 
 func GetBLSSignatures(commit *types.Commit) (blsSignatures [][]byte) {
 	for _, signature := range commit.Signatures {
-		blsSignatures = append(blsSignatures, signature.BLSSignature)
+		if len(signature.BLSSignature) > 0 {
+			blsSignatures = append(blsSignatures, signature.BLSSignature)
+		}
 	}
 	return blsSignatures
+}
+
+func GetBLSData(commit *types.Commit, validators *types.ValidatorSet) (blsSigners, blsSignatures [][]byte, votingPowers []int64, err error) {
+	for _, signature := range commit.Signatures {
+		if len(signature.BLSSignature) > 0 {
+			blsSignatures = append(blsSignatures, signature.BLSSignature)
+			_, validator := validators.GetByAddress(signature.ValidatorAddress)
+			if validator == nil {
+				err = fmt.Errorf("no validator found by addresss: %x", signature.ValidatorAddress)
+				return
+			}
+			blsSigners = append(blsSigners, validator.PubKey.Bytes())
+			votingPowers = append(votingPowers, validator.VotingPower)
+		}
+	}
+	return
 }

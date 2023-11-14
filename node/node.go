@@ -111,7 +111,7 @@ func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
 
 	return NewNode(
 		config,
-		l2node.NewMockL2Node(1),
+		l2node.NewMockL2Node(1, ""),
 		privval.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile()),
 		&blsPrivKey,
 		nodeKey,
@@ -792,7 +792,7 @@ func NewNode(
 	// and replays any blocks as necessary to sync tendermint with the app.
 	consensusLogger := logger.With("module", "consensus")
 	if !stateSync {
-		if state.LastBlockHeight == 0 {
+		if state.LastBlockHeight == 0 { // ? may cause mismatch of (blocksync/reactor.go #78)
 			if err := doHandshake(stateStore, state, blockStore, genDoc, eventBus, proxyApp, consensusLogger); err != nil {
 				return nil, err
 			}
@@ -959,85 +959,43 @@ func NewNode(
 		for i := h + 1; i < csHeight; i++ {
 			block := blockStore.LoadBlock(i)
 			blockNext := blockStore.LoadBlock(i + 1)
-
-			var valset [][]byte
-			var vals [][]byte
-			var batchContext []byte
-			valAddrs := l2node.GetValidators(blockNext.LastCommit)
 			validators, err := stateStore.LoadValidators(h)
 			if err != nil {
 				panic(err)
 			}
-			for _, val := range validators.Validators {
-				valset = append(valset, val.PubKey.Bytes())
-				for _, addr := range valAddrs {
-					if bytes.Equal(val.Address, addr) {
-						vals = append(vals, val.PubKey.Bytes())
-					}
-				}
-			}
-			if cs.CheckBLS(blockStore.LoadSeenCommit(i).Signatures) {
-				batchContext = cs.GetBatchContext(
-					l2Node,
-					blockStore,
-					state.InitialHeight,
-					i-1,
-				)
+			blsSigners, blsSigs, _, err := l2node.GetBLSData(blockNext.LastCommit, validators)
+			if err != nil {
+				panic(err)
 			}
 			if _, _, err := node.ConsensusState().GetL2Node().DeliverBlock(
 				l2node.ConvertTxsToBytes(block.Data.Txs),
-				l2node.Configs{
-					L2Config: block.Data.L2Config,
-					ZKConfig: block.Data.ZkConfig,
-					Root:     block.Data.Root,
-				},
+				block.Data.L2BlockMeta,
 				l2node.ConsensusData{
-					ValidatorSet:  valset,
-					Validators:    vals,
-					BlsSignatures: l2node.GetBLSSignatures(blockNext.LastCommit),
-					Message:       batchContext,
+					ValidatorSet:  validators.GetPubKeyBytesList(),
+					BlsSigners:    blsSigs,
+					BlsSignatures: blsSigners,
 				},
 			); err != nil {
 				panic(err)
 			}
 		}
+
 		block := blockStore.LoadBlock(csHeight)
-		var valset [][]byte
-		var vals [][]byte
-		var batchContext []byte
-		valAddrs := l2node.GetValidators(blockStore.LoadSeenCommit(csHeight))
 		validators, err := stateStore.LoadValidators(csHeight)
 		if err != nil {
 			panic(err)
 		}
-		for _, val := range validators.Validators {
-			valset = append(valset, val.PubKey.Bytes())
-			for _, addr := range valAddrs {
-				if bytes.Equal(val.Address, addr) {
-					vals = append(vals, val.PubKey.Bytes())
-				}
-			}
-		}
-		if cs.CheckBLS(blockStore.LoadSeenCommit(csHeight).Signatures) {
-			batchContext = cs.GetBatchContext(
-				l2Node,
-				blockStore,
-				state.InitialHeight,
-				csHeight-1,
-			)
+		blsSigners, blsSigs, _, err := l2node.GetBLSData(blockStore.LoadSeenCommit(csHeight), validators)
+		if err != nil {
+			panic(err)
 		}
 		if _, _, err := node.ConsensusState().GetL2Node().DeliverBlock(
 			l2node.ConvertTxsToBytes(block.Data.Txs),
-			l2node.Configs{
-				L2Config: block.Data.L2Config,
-				ZKConfig: block.Data.ZkConfig,
-				Root:     block.Data.Root,
-			},
+			block.L2BlockMeta,
 			l2node.ConsensusData{
-				ValidatorSet:  valset,
-				Validators:    vals,
-				BlsSignatures: l2node.GetBLSSignatures(blockStore.LoadSeenCommit(csHeight)),
-				Message:       batchContext,
+				ValidatorSet:  validators.GetPubKeyBytesList(),
+				BlsSigners:    blsSigners,
+				BlsSignatures: blsSigs,
 			},
 		); err != nil {
 			panic(err)

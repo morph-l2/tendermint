@@ -2,6 +2,7 @@ package types
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"math"
@@ -57,8 +58,8 @@ type ValidatorSet struct {
 }
 
 // NewValidatorSet initializes a ValidatorSet by copying over the values from
-// `valz`, a list of Validators. If valz is nil or empty, the new ValidatorSet
-// will have an empty list of Validators.
+// `valz`, a list of BlsSigners. If valz is nil or empty, the new ValidatorSet
+// will have an empty list of BlsSigners.
 //
 // The addresses of validators in `valz` must be unique otherwise the function
 // panics.
@@ -283,6 +284,13 @@ func (vals *ValidatorSet) GetByIndex(index int32) (address []byte, val *Validato
 	}
 	val = vals.Validators[index]
 	return val.Address, val.Copy()
+}
+
+func (vals *ValidatorSet) GetPubKeyBytesList() (pkBytesList [][]byte) {
+	for _, val := range vals.Validators {
+		pkBytesList = append(pkBytesList, val.Bytes())
+	}
+	return
 }
 
 // Size returns the length of the validator set.
@@ -600,6 +608,12 @@ func (vals *ValidatorSet) updateWithChangeSet(changes []*Validator, allowDeletes
 	if err != nil {
 		return err
 	}
+	for _, update := range updates {
+		fmt.Printf(">>>>>>>>>>>>updated pubKey: %s \n", base64.StdEncoding.EncodeToString(update.PubKey.Bytes()))
+	}
+	for _, delete := range deletes {
+		fmt.Printf(">>>>>>>>>>>>deleted pubKey: %s \n", base64.StdEncoding.EncodeToString(delete.PubKey.Bytes()))
+	}
 
 	if !allowDeletes && len(deletes) != 0 {
 		return fmt.Errorf("cannot process validators with voting power 0: %v", deletes)
@@ -885,7 +899,7 @@ func (vals *ValidatorSet) StringIndented(indent string) string {
 	})
 	return fmt.Sprintf(`ValidatorSet{
 %s  Proposer: %v
-%s  Validators:
+%s  BlsSigners:
 %s    %v
 %s}`,
 		indent, vals.GetProposer().String(),

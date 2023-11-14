@@ -8,11 +8,9 @@ import (
 )
 
 type BlockData struct {
-	Height   int64
-	Txs      [][]byte
-	L2Config []byte
-	ZKConfig []byte
-	Root     []byte
+	Height int64
+	Txs    [][]byte
+	Meta   []byte
 }
 
 type Notifier struct {
@@ -44,18 +42,16 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 		go func() {
 			defer n.wg.Done()
 			for {
-				txs, configs, collectedL1Msgs, err := n.l2Node.RequestBlockData(height)
+				txs, metaData, collectedL1Msgs, err := n.l2Node.RequestBlockData(height)
 				if err != nil {
 					n.logger.Error("failed to call l2Node.RequestBlockData", "err", err)
 					return
 				}
 				if len(txs) > 0 || collectedL1Msgs {
 					n.blockData = &BlockData{
-						Height:   height,
-						Txs:      txs,
-						L2Config: configs.L2Config,
-						ZKConfig: configs.ZKConfig,
-						Root:     configs.Root,
+						Height: height,
+						Txs:    txs,
+						Meta:   metaData,
 					}
 					n.txsAvailable <- struct{}{}
 					return
@@ -72,18 +68,16 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 				case <-timeout:
 					return
 				default:
-					txs, configs, collectedL1Msgs, err := n.l2Node.RequestBlockData(height)
+					txs, metaData, collectedL1Msgs, err := n.l2Node.RequestBlockData(height)
 					if err != nil {
 						n.logger.Error("failed to call l2Node.RequestBlockData", "err", err)
 						return
 					}
 					if len(txs) > 0 || collectedL1Msgs {
 						n.blockData = &BlockData{
-							Height:   height,
-							Txs:      txs,
-							L2Config: configs.L2Config,
-							ZKConfig: configs.ZKConfig,
-							Root:     configs.Root,
+							Height: height,
+							Txs:    txs,
+							Meta:   metaData,
 						}
 						n.txsAvailable <- struct{}{}
 						return

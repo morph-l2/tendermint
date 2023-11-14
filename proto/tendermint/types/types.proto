@@ -49,7 +49,8 @@ message Part {
 // BlockID
 message BlockID {
   bytes         hash            = 1;
-  PartSetHeader part_set_header = 2 [(gogoproto.nullable) = false];
+  bytes         batch_hash      = 2 [(gogoproto.customname) = "BatchHash"];
+  PartSetHeader part_set_header = 3 [(gogoproto.nullable) = false];
 }
 
 // --------------------------------
@@ -79,6 +80,9 @@ message Header {
   // consensus info
   bytes evidence_hash    = 13;  // evidence included in the block
   bytes proposer_address = 14;  // original proposer of the block
+
+  // batch info
+  bytes batch_hash = 15;
 }
 
 // Data contains the set of transactions included in the block
@@ -88,9 +92,8 @@ message Data {
   // This means that block.AppHash does not include these txs.
   repeated bytes txs = 1;
 
-  bytes l2_config = 2 [(gogoproto.customname) = "L2Config"];
-  bytes zk_config = 3 [(gogoproto.customname) = "ZkConfig"];
-  bytes root      = 4 [(gogoproto.customname) = "Root"];
+  bytes l2_block_meta = 2 [(gogoproto.customname) = "L2BlockMeta"];
+  bytes l2_batch_header = 3 [(gogoproto.customname) = "L2BatchHeader"];
 }
 
 // Vote represents a prevote, precommit, or commit vote from validators for
@@ -111,10 +114,10 @@ message Vote {
 
 // Commit contains the evidence that a block was committed by a set of validators.
 message Commit {
-  int64              height     = 1;
-  int32              round      = 2;
-  BlockID            block_id   = 3 [(gogoproto.nullable) = false, (gogoproto.customname) = "BlockID"];
-  repeated CommitSig signatures = 4 [(gogoproto.nullable) = false];
+  int64              height          = 1;
+  int32              round           = 2;
+  BlockID            block_id        = 3 [(gogoproto.nullable) = false, (gogoproto.customname) = "BlockID"];
+  repeated CommitSig signatures      = 4 [(gogoproto.nullable) = false];
 }
 
 // CommitSig is a part of the Vote included in a Commit.

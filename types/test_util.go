@@ -87,22 +87,22 @@ func MakeVote(
 func MakeBlock(
 	height int64,
 	txs []Tx,
-	l2Config []byte,
-	zkConfig []byte,
-	root []byte,
+	blockMeta []byte,
+	batchHash []byte,
+	batchHeader []byte,
 	lastCommit *Commit,
 	evidence []Evidence,
 ) *Block {
 	block := &Block{
 		Header: Header{
-			Version: tmversion.Consensus{Block: version.BlockProtocol, App: 0},
-			Height:  height,
+			Version:   tmversion.Consensus{Block: version.BlockProtocol, App: 0},
+			Height:    height,
+			BatchHash: batchHash,
 		},
 		Data: Data{
-			Txs:      txs,
-			L2Config: l2Config,
-			ZkConfig: zkConfig,
-			Root:     root,
+			Txs:           txs,
+			L2BlockMeta:   blockMeta,
+			L2BatchHeader: batchHeader,
 		},
 		Evidence:   EvidenceData{Evidence: evidence},
 		LastCommit: lastCommit,

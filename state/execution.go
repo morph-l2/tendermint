@@ -106,6 +106,7 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 	state State,
 	commit *types.Commit,
 	proposerAddr []byte,
+	decideBatchPoint decideBatchPointFunc,
 ) (
 	*types.Block, error,
 ) {
@@ -118,19 +119,15 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 	maxDataBytes := types.MaxDataBytes(maxBytes, evSize, state.Validators.Size())
 
 	var txs [][]byte
-	var configs l2node.Configs
+	var blockMeta []byte
 	var err error
 	if config.WaitForTxs() {
 		blockData := blockExec.notifier.WaitForBlockData()
 		if blockData != nil && blockData.Height == height {
 			txs = blockData.Txs
-			configs = l2node.Configs{
-				L2Config: blockData.L2Config,
-				ZKConfig: blockData.ZKConfig,
-				Root:     blockData.Root,
-			}
+			blockMeta = blockData.Meta
 		} else {
-			txs, configs, _, err = l2Node.RequestBlockData(height)
+			txs, blockMeta, _, err = l2Node.RequestBlockData(height)
 			if err != nil {
 				// return nil, err
 				panic(err)
@@ -138,14 +135,14 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 		}
 		blockExec.notifier.CleanBlockData()
 	} else {
-		txs, configs, _, err = l2Node.RequestBlockData(height)
+		txs, blockMeta, _, err = l2Node.RequestBlockData(height)
 		if err != nil {
 			// return nil, err
 			panic(err)
 		}
 	}
 
-	block := state.MakeBlock(height, l2node.ConvertBytesToTxs(txs), configs.L2Config, configs.ZKConfig, configs.Root, commit, evidence, proposerAddr)
+	block := state.MakeBlock(height, l2node.ConvertBytesToTxs(txs), blockMeta, commit, evidence, proposerAddr, decideBatchPoint)
 
 	localLastCommit := buildLastCommitInfo(block, blockExec.store, state.InitialHeight)
 	rpp, err := blockExec.proxyApp.PrepareProposalSync(
@@ -173,7 +170,7 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 		return nil, err
 	}
 
-	return state.MakeBlock(height, txl, configs.L2Config, configs.ZKConfig, configs.Root, commit, evidence, proposerAddr), nil
+	return state.MakeBlock(height, txl, blockMeta, commit, evidence, proposerAddr, decideBatchPoint), nil
 }
 
 func (blockExec *BlockExecutor) ProcessProposal(
@@ -539,7 +536,7 @@ func updateState(
 	State, error,
 ) {
 	// Copy the valset so we can apply changes from EndBlock
-	// and update s.LastValidators and s.Validators.
+	// and update s.LastValidators and s.BlsSigners.
 	nValSet := state.NextValidators.Copy()
 
 	lastHeightValsChanged := state.LastHeightValidatorsChanged

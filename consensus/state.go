@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	tmbytes "github.com/tendermint/tendermint/libs/bytes"
 	"io"
 	"os"
 	"runtime/debug"
@@ -11,8 +12,6 @@ import (
 	"time"
 
 	"github.com/cosmos/gogoproto/proto"
-	ethcrypto "github.com/scroll-tech/go-ethereum/crypto"
-
 	"github.com/tendermint/tendermint/blssignatures"
 	cfg "github.com/tendermint/tendermint/config"
 	cstypes "github.com/tendermint/tendermint/consensus/types"
@@ -109,6 +108,9 @@ type State struct {
 	// privValidator pubkey, memoized for the duration of one block
 	// to avoid extra requests to HSM
 	privValidatorPubKey crypto.PubKey
+
+	// batchCache caches the block info. since last batch point
+	batchCache *BatchCache
 
 	// state changes may be triggered by: msgs from peers,
 	// msgs from ourself, or by timeouts
@@ -1262,35 +1264,73 @@ func (cs *State) createProposalBlock() (*types.Block, error) {
 
 	proposerAddr := cs.privValidatorPubKey.Address()
 
-	ret, err := cs.blockExec.CreateProposalBlock(cs.l2Node, cs.config, cs.Height, cs.state, commit, proposerAddr)
+	ret, err := cs.blockExec.CreateProposalBlock(
+		cs.l2Node,
+		cs.config,
+		cs.Height,
+		cs.state,
+		commit,
+		proposerAddr,
+		func(l2BlockMeta tmbytes.HexBytes, txs types.Txs, blockHeight int64, blockTime time.Time) ([]byte, []byte) {
+			return cs.decideBatchPoint(l2BlockMeta, txs, blockHeight, blockTime)
+		})
 	if err != nil {
 		panic(err)
 	}
 
+	cs.setTrustBatchData(ret.Hash(), ret.BatchHash, ret.L2BatchHeader)
+
 	return ret, nil
 }
 
-func (cs *State) checkBatchpoint(block *types.Block) (batchpoint bool, batchContextHash []byte) {
-	if cs.Height != cs.state.InitialHeight {
-		// save context and checkpoint
-		batchStartHeight, batchStartTime := cs.getBatchStart(block)
-		zkConfigContext, rawBatchTxs, root := cs.batchData(batchStartHeight)
-		batchSizeWithProposalBlock := len(zkConfigContext) + txsSize(rawBatchTxs) + len(block.Data.ZkConfig) + txsSize(cs.proposalBlockRawTxs(block)) + len(block.Data.Root)
-		if cs.isBatchPoint(
-			batchStartHeight,
-			batchSizeWithProposalBlock,
-			batchStartTime,
-			block.Time,
-		) {
-			encodedTxs, err := cs.l2Node.EncodeTxs(rawBatchTxs)
-			if err != nil {
-				panic(err)
+func (cs *State) setTrustBatchData(blockHash tmbytes.HexBytes, batchHash, batchHeader []byte) {
+	cs.batchCache.StoreBatchData(blockHash, batchHash, batchHeader)
+}
+
+func (cs *State) decideBatchPoint(l2BlockMeta tmbytes.HexBytes, txs types.Txs, blockHeight int64, blockTime time.Time) (batchHash []byte, batchHeader []byte) {
+	batchStartHeight, batchStartTime := cs.getBatchStart()
+	batchSize, err := cs.l2Node.CalculateBatchSizeWithProposalBlock(
+		l2BlockMeta.Bytes(),
+		txs,
+		func() (parentBatchHeader []byte, blocksMeta [][]byte, transactions []types.Txs, err error) {
+			// cs.getBatchStart promised we have batch data cached in cs.batchCache
+			parentBatchHeader = cs.batchCache.ParentBatchHeader
+			historicBlocks := cs.batchCache.BlocksSinceLastBatchPoint
+			fmt.Printf("======>historicBlocks: %d \n", len(historicBlocks))
+			for _, hb := range historicBlocks {
+				blocksMeta = append(blocksMeta, hb.L2BlockMeta)
+				transactions = append(transactions, hb.Txs)
 			}
-			batchContext := cs.batchContext(zkConfigContext, encodedTxs, root)
-			batchContextHash = ethcrypto.Keccak256(batchContext)
-			batchpoint = true
+			return
+		})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("=============>decideBatchPoint, block height: %d, batchStartHeight: %d, blockTime: %d, batchStartTime: %d, batchSize: %d \n", blockHeight, batchStartHeight, blockTime, batchStartTime, batchSize)
+	fmt.Printf("=============>batch params, BlocksInterval: %d, Timeout: %d, MaxBytes: %d \n", cs.state.ConsensusParams.Batch.BlocksInterval, cs.state.ConsensusParams.Batch.Timeout, cs.state.ConsensusParams.Batch.MaxBytes)
+	if (cs.state.ConsensusParams.Batch.BlocksInterval > 0 && blockHeight-batchStartHeight >= cs.state.ConsensusParams.Batch.BlocksInterval) ||
+		(cs.state.ConsensusParams.Batch.Timeout > 0 && blockTime.Sub(batchStartTime) >= cs.state.ConsensusParams.Batch.Timeout) ||
+		(cs.state.ConsensusParams.Batch.MaxBytes > 0 && batchSize >= cs.state.ConsensusParams.Batch.MaxBytes) {
+		batchHash, batchHeader, err = cs.l2Node.SealBatch()
+		if err != nil {
+			panic(err)
 		}
 	}
+	return
+}
+
+func (cs *State) decideBatchPointWithProposedBlock(block *types.Block) (batchHash []byte, batchHeader []byte) {
+	if cs.Height == cs.state.InitialHeight {
+		return
+	}
+	if cs.batchCache != nil {
+		getBatchData, found := cs.batchCache.batchData(block.Hash())
+		if found {
+			return getBatchData.batchHash, getBatchData.batchHeader
+		}
+	}
+	batchHash, batchHeader = cs.decideBatchPoint(block.L2BlockMeta, block.Txs, block.Height, block.Time)
+	cs.batchCache.StoreBatchData(block.Hash(), batchHash, batchHeader)
 	return
 }
 
@@ -1330,14 +1370,14 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 	// If a block is locked, prevote that.
 	if cs.LockedBlock != nil {
 		logger.Debug("prevote step; already locked on a block; prevoting locked block")
-		cs.signAddVote(tmproto.PrevoteType, cs.LockedBlock.Hash(), cs.LockedBlockParts.Header())
+		cs.signAddVote(tmproto.PrevoteType, cs.LockedBlock.Hash(), nil, cs.LockedBlockParts.Header())
 		return
 	}
 
 	// If ProposalBlock is nil, prevote nil.
 	if cs.ProposalBlock == nil {
 		logger.Debug("prevote step: ProposalBlock is nil")
-		cs.signAddVote(tmproto.PrevoteType, nil, types.PartSetHeader{})
+		cs.signAddVote(tmproto.PrevoteType, nil, nil, types.PartSetHeader{})
 		return
 	}
 
@@ -1345,7 +1385,7 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 	if err := cs.blockExec.ValidateBlock(cs.state, cs.ProposalBlock); err != nil {
 		// ProposalBlock is invalid, prevote nil.
 		logger.Error("prevote step: consensus deems this block invalid; prevoting nil", "err", err)
-		cs.signAddVote(tmproto.PrevoteType, nil, types.PartSetHeader{})
+		cs.signAddVote(tmproto.PrevoteType, nil, nil, types.PartSetHeader{})
 		return
 	}
 
@@ -1366,47 +1406,51 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 	}
 	cs.metrics.MarkProposalProcessed(isAppValid)
 
-	// TODO
-	if len(cs.ProposalBlock.Data.L2Config) == 0 || len(cs.ProposalBlock.Data.ZkConfig) == 0 || len(cs.ProposalBlock.Data.Root) == 0 {
-		panic("nil config")
-	}
-
-	if cs.isValidator(cs.privValidatorPubKey.Address()) {
-		// request l2node to check whether the block data is valid
-		valid, err := cs.l2Node.CheckBlockData(
-			l2node.ConvertTxsToBytes(cs.ProposalBlock.Data.Txs),
-			l2node.Configs{
-				L2Config: cs.ProposalBlock.Data.L2Config,
-				ZKConfig: cs.ProposalBlock.Data.ZkConfig,
-				Root:     cs.ProposalBlock.Data.Root,
-			},
-		)
-		if err != nil {
-			logger.Error("check block data failed", err)
-			panic(err)
-			// return
-		}
-		if !valid {
-			logger.Error("block data is not accepted; the proposer may be misbehaving; prevoting nil", "err", err)
-			cs.signAddVote(tmproto.PrevoteType, nil, types.PartSetHeader{})
-		}
-	}
-
 	// Vote nil if the Application rejected the block
 	if !isAppValid {
 		logger.Error(
 			"prevote step: state machine rejected a proposed block; this should not happen: the proposer may be misbehaving; prevoting nil",
 			"err", err,
 		)
-		cs.signAddVote(tmproto.PrevoteType, nil, types.PartSetHeader{})
+		cs.signAddVote(tmproto.PrevoteType, nil, nil, types.PartSetHeader{})
 		return
+	}
+
+	if cs.isValidator(cs.privValidatorPubKey.Address()) {
+		// Vote nil if found unexpected batchHash or batchHeader
+		batchHash, batchHeader := cs.decideBatchPointWithProposedBlock(cs.ProposalBlock)
+		if !bytes.Equal(batchHash, cs.ProposalBlock.BatchHash) {
+			logger.Error("prevote step: consensus deems this block invalid; prevoting nil", "reason", "unexpected batchHash", "expected", batchHash, "actual", cs.ProposalBlock.BatchHash)
+			cs.signAddVote(tmproto.PrevoteType, nil, nil, types.PartSetHeader{})
+			return
+		}
+		if !bytes.Equal(batchHeader, cs.ProposalBlock.L2BatchHeader) {
+			logger.Error("prevote step: consensus deems this block invalid; prevoting nil", "reason", "unexpected batchHeader", "expected", batchHeader, "actual", cs.ProposalBlock.L2BatchHeader)
+			cs.signAddVote(tmproto.PrevoteType, nil, nil, types.PartSetHeader{})
+			return
+		}
+		// request l2node to check whether the block data is valid
+		valid, err := cs.l2Node.CheckBlockData(
+			l2node.ConvertTxsToBytes(cs.ProposalBlock.Data.Txs),
+			cs.ProposalBlock.Data.L2BlockMeta,
+		)
+		if err != nil {
+			logger.Error("check block data failed", err)
+			cs.signAddVote(tmproto.PrevoteType, nil, nil, types.PartSetHeader{})
+			return
+		}
+		if !valid {
+			logger.Error("block data is not accepted; the proposer may be misbehaving; prevoting nil", "err", err)
+			cs.signAddVote(tmproto.PrevoteType, nil, nil, types.PartSetHeader{})
+			return
+		}
 	}
 
 	// Prevote cs.ProposalBlock
 	// NOTE: the proposal signature is validated when it is received,
 	// and the proposal block parts are validated as they are received (against the merkle hash in the proposal)
 	logger.Debug("prevote step: ProposalBlock is valid")
-	cs.signAddVote(tmproto.PrevoteType, cs.ProposalBlock.Hash(), cs.ProposalBlockParts.Header())
+	cs.signAddVote(tmproto.PrevoteType, cs.ProposalBlock.Hash(), cs.ProposalBlock.BatchHash, cs.ProposalBlockParts.Header())
 }
 
 // Enter: any +2/3 prevotes at next round.
@@ -1476,7 +1520,7 @@ func (cs *State) enterPrecommit(height int64, round int32) {
 			logger.Debug("precommit step; no +2/3 prevotes during enterPrecommit; precommitting nil")
 		}
 
-		cs.signAddVote(tmproto.PrecommitType, nil, types.PartSetHeader{})
+		cs.signAddVote(tmproto.PrecommitType, nil, nil, types.PartSetHeader{})
 		return
 	}
 
@@ -1506,7 +1550,7 @@ func (cs *State) enterPrecommit(height int64, round int32) {
 			}
 		}
 
-		cs.signAddVote(tmproto.PrecommitType, nil, types.PartSetHeader{})
+		cs.signAddVote(tmproto.PrecommitType, nil, nil, types.PartSetHeader{})
 		return
 	}
 
@@ -1521,7 +1565,7 @@ func (cs *State) enterPrecommit(height int64, round int32) {
 			logger.Error("failed publishing event relock", "err", err)
 		}
 
-		cs.signAddVote(tmproto.PrecommitType, blockID.Hash, blockID.PartSetHeader)
+		cs.signAddVote(tmproto.PrecommitType, blockID.Hash, cs.ProposalBlock.BatchHash, blockID.PartSetHeader)
 		return
 	}
 
@@ -1534,6 +1578,14 @@ func (cs *State) enterPrecommit(height int64, round int32) {
 			panic(fmt.Sprintf("precommit step; +2/3 prevoted for an invalid block: %v", err))
 		}
 
+		if cs.isValidator(cs.privValidatorPubKey.Address()) { // currently we skip batchPoint check for non-validator
+			// Validate batch data.
+			batchHash, batchHeader := cs.decideBatchPointWithProposedBlock(cs.ProposalBlock)
+			if !bytes.Equal(batchHash, cs.ProposalBlock.BatchHash) || !bytes.Equal(batchHeader, cs.ProposalBlock.L2BatchHeader) {
+				panic(fmt.Sprintf("precommit step; +2/3 prevoted for an invalid block: %v", fmt.Errorf("unexpected batchData. expectedHash: %x, actualHash: %x", batchHash, cs.ProposalBlock.BatchHash)))
+			}
+		}
+
 		cs.LockedRound = round
 		cs.LockedBlock = cs.ProposalBlock
 		cs.LockedBlockParts = cs.ProposalBlockParts
@@ -1542,7 +1594,7 @@ func (cs *State) enterPrecommit(height int64, round int32) {
 			logger.Error("failed publishing event lock", "err", err)
 		}
 
-		cs.signAddVote(tmproto.PrecommitType, blockID.Hash, blockID.PartSetHeader)
+		cs.signAddVote(tmproto.PrecommitType, blockID.Hash, cs.ProposalBlock.BatchHash, blockID.PartSetHeader)
 		return
 	}
 
@@ -1564,7 +1616,7 @@ func (cs *State) enterPrecommit(height int64, round int32) {
 		logger.Error("failed publishing event unlock", "err", err)
 	}
 
-	cs.signAddVote(tmproto.PrecommitType, nil, types.PartSetHeader{})
+	cs.signAddVote(tmproto.PrecommitType, nil, nil, types.PartSetHeader{})
 }
 
 // Enter: any +2/3 precommits for next round.
@@ -1772,55 +1824,35 @@ func (cs *State) finalizeCommit(height int64) {
 	// Create a copy of the state for staging and an event cache for txs.
 	stateCopy := cs.state.Copy()
 
-	if len(block.Data.L2Config) == 0 || len(block.Data.ZkConfig) == 0 || len(block.Data.Root) == 0 {
-		panic("error3: nil config")
+	blsSigners, blsSigs, _, err := l2node.GetBLSData(seenCommit, stateCopy.Validators)
+	if err != nil {
+		panic(err)
 	}
-
-	var valset [][]byte
-	var vals [][]byte
-	valAddrs := l2node.GetValidators(seenCommit)
-	for _, val := range stateCopy.Validators.Validators {
-		valset = append(valset, val.PubKey.Bytes())
-		for _, addr := range valAddrs {
-			if bytes.Equal(val.Address, addr) {
-				vals = append(vals, val.PubKey.Bytes())
-			}
-		}
-	}
-
-	blsSignatures := l2node.GetBLSSignatures(seenCommit)
-	if len(valAddrs) == 0 || len(blsSignatures) == 0 {
-		logger.Error("error3: nil sig or val")
-		return
-	}
-
-	var batchContext []byte
-	if CheckBLS(seenCommit.Signatures) {
-		batchContext = GetBatchContext(
-			cs.l2Node,
-			cs.blockStore,
-			cs.state.InitialHeight,
-			cs.ProposalBlock.Height-1,
-		)
-	}
-
+	valset := stateCopy.Validators.GetPubKeyBytesList()
 	nextBatchParams, nextValidatorSet, err := cs.l2Node.DeliverBlock(
 		l2node.ConvertTxsToBytes(block.Data.Txs),
-		l2node.Configs{
-			L2Config: block.Data.L2Config,
-			ZKConfig: block.Data.ZkConfig,
-			Root:     block.Data.Root,
-		},
+		block.L2BlockMeta,
 		l2node.ConsensusData{
 			ValidatorSet:  valset,
-			Validators:    vals,
-			BlsSignatures: blsSignatures,
-			Message:       batchContext,
+			BlsSigners:    blsSigners,
+			BlsSignatures: blsSigs,
 		},
 	)
 	if err != nil {
-		logger.Error(err.Error())
+		logger.Error("failed to deliver block", "err", err, "height", block.Height)
 		return
+	}
+
+	if len(block.BatchHash) > 0 { // this is a batchPoint
+		if err = cs.l2Node.CommitBatch(); err != nil {
+			logger.Error("failed to commit batch", "err", err, "height", block.Height)
+			return
+		}
+	} else {
+		if err = cs.l2Node.PackCurrentBlock(); err != nil {
+			logger.Error("failed to pack current block", "err", err, "height", block.Height)
+			return
+		}
 	}
 
 	// Execute and commit the block, update and save the state.
@@ -1830,6 +1862,7 @@ func (cs *State) finalizeCommit(height int64) {
 		stateCopy,
 		types.BlockID{
 			Hash:          block.Hash(),
+			BatchHash:     block.BatchHash,
 			PartSetHeader: blockParts.Header(),
 		},
 		block,
@@ -1856,6 +1889,15 @@ func (cs *State) finalizeCommit(height int64) {
 	// must be called before we update state
 	cs.recordMetrics(height, block)
 
+	if cs.batchCache != nil {
+		cs.batchCache.ClearBatchData()
+		if len(block.BatchHash) > 0 { // batch point
+			fmt.Printf("===========>start to UpdateStartPoint, block batchHash: %x \n", block.BatchHash)
+			cs.batchCache.UpdateStartPoint(block)
+		} else {
+			cs.batchCache.AppendBlock(block)
+		}
+	}
 	// NewHeightStep!
 	cs.updateToState(stateCopy)
 
@@ -2228,6 +2270,26 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID, replay bool) (added bo
 		return
 	}
 
+	// verify the bls signature if it exists
+	if vote.Type == tmproto.PrecommitType {
+		if len(vote.BlockID.BatchHash) > 0 {
+			if len(vote.BLSSignature) == 0 {
+				return false, fmt.Errorf("lack of bls signature of batchHash: %x", vote.BlockID.BatchHash)
+			}
+			pubKey := cs.Validators.Validators[vote.ValidatorIndex].PubKey.Bytes()
+			valid, err := cs.l2Node.VerifySignature(pubKey, vote.BlockID.BatchHash, vote.BLSSignature)
+			if err != nil {
+				return false, fmt.Errorf("failed to verify bls signature. err: %v", err)
+			}
+
+			if !valid {
+				return false, fmt.Errorf("%v. sig: %x, batchHash: %x, tmKey: %x", ErrBLSSignatureInalvid, vote.BLSSignature, vote.BlockID.BatchHash, pubKey)
+			}
+		} else if len(vote.BLSSignature) > 0 {
+			return false, errors.New("should not have bls signature while the batchHash is empty")
+		}
+	}
+
 	height := cs.Height
 	added, err = cs.Votes.AddVote(vote, peerID)
 	if !added {
@@ -2326,28 +2388,6 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID, replay bool) (added bo
 		}
 
 	case tmproto.PrecommitType:
-		// verify bls signature
-		if !replay && cs.ProposalBlock != nil {
-			batchpoint, batchContextHash := cs.checkBatchpoint(cs.ProposalBlock)
-			if batchpoint {
-				if len(vote.BLSSignature) == 0 {
-					cs.Logger.Error("batchpoint without BLSSignature")
-					return false, ErrBLSSignatureInalvid
-				}
-				vaild, err := cs.l2Node.VerifySignature(cs.Validators.Validators[vote.ValidatorIndex].PubKey.Bytes(), batchContextHash, vote.BLSSignature)
-				if err != nil {
-					cs.Logger.Error(err.Error())
-					return false, err
-				}
-				if !vaild {
-					cs.Logger.Error("fake BLSSignature")
-					return false, ErrBLSSignatureInalvid
-				}
-			} else if len(vote.BLSSignature) != 0 {
-				cs.Logger.Error("BLSSignature that should not exist")
-				return false, ErrBLSSignatureInalvid
-			}
-		}
 		precommits := cs.Votes.Precommits(vote.Round)
 		cs.Logger.Debug(
 			"added vote to precommit",
@@ -2388,6 +2428,7 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID, replay bool) (added bo
 func (cs *State) signVote(
 	msgType tmproto.SignedMsgType,
 	hash []byte,
+	batchHash []byte,
 	header types.PartSetHeader,
 ) (
 	*types.Vote,
@@ -2413,7 +2454,7 @@ func (cs *State) signVote(
 		Round:            cs.Round,
 		Timestamp:        cs.voteTime(),
 		Type:             msgType,
-		BlockID:          types.BlockID{Hash: hash, PartSetHeader: header},
+		BlockID:          types.BlockID{Hash: hash, BatchHash: batchHash, PartSetHeader: header},
 	}
 
 	v := vote.ToProto()
@@ -2423,38 +2464,16 @@ func (cs *State) signVote(
 	vote.Signature = v.Signature
 	vote.Timestamp = v.Timestamp
 
-	if cs.ProposalBlock == nil {
-		return vote, nil
-	}
-
-	if cs.ProposalBlock.Height == cs.state.InitialHeight {
-		return vote, nil
-	}
-
-	batchStartHeight, batchStartTime := cs.getBatchStart(cs.ProposalBlock)
-	zkConfigContext, rawBatchTxs, root := cs.batchData(batchStartHeight)
-	batchSizeWithProposalBlock := len(zkConfigContext) + txsSize(rawBatchTxs) + len(cs.ProposalBlock.Data.ZkConfig) + txsSize(cs.proposalBlockRawTxs(cs.ProposalBlock)) + len(cs.ProposalBlock.Data.Root)
-	if cs.isBatchPoint(
-		batchStartHeight,
-		batchSizeWithProposalBlock,
-		batchStartTime,
-		cs.ProposalBlock.Time,
-	) {
-		encodedTxs, err := cs.l2Node.EncodeTxs(rawBatchTxs)
-		if err != nil {
-			panic(err)
-		}
-		batchContext := cs.batchContext(zkConfigContext, encodedTxs, root)
+	if len(batchHash) != 0 {
 		sig, err := blssignatures.SignMessage(
 			*cs.blsPrivKey,
-			ethcrypto.Keccak256(batchContext),
+			batchHash,
 		)
 		if err != nil {
 			return nil, err
 		}
 		vote.BLSSignature = blssignatures.SignatureToBytes(sig)
 	}
-
 	return vote, nil
 }
 
@@ -2480,10 +2499,7 @@ func (cs *State) voteTime() time.Time {
 }
 
 // sign the vote and publish on internalMsgQueue
-func (cs *State) signAddVote(msgType tmproto.SignedMsgType, hash []byte, header types.PartSetHeader) *types.Vote {
-
-	// TODO check bls key
-
+func (cs *State) signAddVote(msgType tmproto.SignedMsgType, hash, batchHash []byte, header types.PartSetHeader) *types.Vote {
 	if cs.privValidator == nil { // the node does not have a key
 		return nil
 	}
@@ -2500,7 +2516,7 @@ func (cs *State) signAddVote(msgType tmproto.SignedMsgType, hash []byte, header 
 	}
 
 	// TODO: pass pubKey to signVote
-	vote, err := cs.signVote(msgType, hash, header)
+	vote, err := cs.signVote(msgType, hash, batchHash, header)
 	if err == nil {
 		cs.sendInternalMessage(msgInfo{&VoteMessage{vote}, ""})
 		cs.Logger.Debug("signed and pushed vote", "height", cs.Height, "round", cs.Round, "vote", vote)
