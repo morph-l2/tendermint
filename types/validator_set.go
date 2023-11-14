@@ -2,7 +2,6 @@ package types
 
 import (
 	"bytes"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"math"
@@ -607,12 +606,6 @@ func (vals *ValidatorSet) updateWithChangeSet(changes []*Validator, allowDeletes
 	updates, deletes, err := processChanges(changes)
 	if err != nil {
 		return err
-	}
-	for _, update := range updates {
-		fmt.Printf(">>>>>>>>>>>>updated pubKey: %s \n", base64.StdEncoding.EncodeToString(update.PubKey.Bytes()))
-	}
-	for _, delete := range deletes {
-		fmt.Printf(">>>>>>>>>>>>deleted pubKey: %s \n", base64.StdEncoding.EncodeToString(delete.PubKey.Bytes()))
 	}
 
 	if !allowDeletes && len(deletes) != 0 {
