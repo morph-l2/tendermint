@@ -1848,12 +1848,12 @@ func (cs *State) finalizeCommit(height int64) {
 	}
 
 	if len(block.BatchHash) > 0 { // this is a batchPoint
-		if err = cs.l2Node.CommitBatch(); err != nil {
+		if err = cs.l2Node.CommitBatch(block.L2BlockMeta, block.Txs); err != nil {
 			logger.Error("failed to commit batch", "err", err, "height", block.Height)
 			return
 		}
 	} else {
-		if err = cs.l2Node.PackCurrentBlock(); err != nil {
+		if err = cs.l2Node.PackCurrentBlock(block.L2BlockMeta, block.Txs); err != nil {
 			logger.Error("failed to pack current block", "err", err, "height", block.Height)
 			return
 		}

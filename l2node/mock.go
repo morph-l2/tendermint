@@ -203,7 +203,10 @@ func (l *MockL2Node) SealBatch() ([]byte, []byte, error) {
 	return batchHash, batchHeader, nil
 }
 
-func (l *MockL2Node) CommitBatch() error {
+func (l *MockL2Node) CommitBatch(
+	currentBlockBytes []byte,
+	currentTxs types.Txs,
+) error {
 	if len(l.sealedBatchHeader) == 0 {
 		return nil
 	}
@@ -224,7 +227,10 @@ func (l *MockL2Node) CommitBatch() error {
 	return nil
 }
 
-func (l *MockL2Node) PackCurrentBlock() error {
+func (l *MockL2Node) PackCurrentBlock(
+	currentBlockBytes []byte,
+	currentTxs types.Txs,
+) error {
 	l.encodingBatch = append(l.encodingBatch, l.currentBlockWithTxsBytes...)
 	l.currentBlockWithTxsBytes = nil
 	return nil

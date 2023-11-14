@@ -76,9 +76,15 @@ type Batcher interface {
 		err error,
 	)
 
-	CommitBatch() error
+	CommitBatch(
+		currentBlockBytes []byte,
+		currentTxs types.Txs,
+	) error
 
-	PackCurrentBlock() error
+	PackCurrentBlock(
+		currentBlockBytes []byte,
+		currentTxs types.Txs,
+	) error
 
 	BatchHash(batchHeader []byte) ([]byte, error)
 }
