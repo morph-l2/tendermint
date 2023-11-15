@@ -1299,11 +1299,13 @@ func (cs *State) decideBatchPoint(l2BlockMeta tmbytes.HexBytes, txs types.Txs, b
 
 			blocksMeta = make([][]byte, len(historicBlocks))
 			transactions = make([]types.Txs, len(historicBlocks))
+			var transactionsCount int
 			for i, hb := range historicBlocks {
 				blocksMeta[i] = hb.L2BlockMeta
 				transactions[i] = hb.Txs
+				transactionsCount += hb.Txs.Len()
 			}
-			cs.Logger.Info("fetching blocks since last batch point", "lastBatchPoint", batchStartHeight, "blockCount", len(historicBlocks), "transactionTotalCount", len(transactions))
+			cs.Logger.Info("fetching blocks since last batch point", "lastBatchPoint", batchStartHeight, "blockCount", len(historicBlocks), "transactionTotalCount", transactionsCount)
 			return
 		})
 	if err != nil {
