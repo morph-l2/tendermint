@@ -237,6 +237,10 @@ func (l *MockL2Node) PackCurrentBlock(
 	return nil
 }
 
+func (l *MockL2Node) AppendBlsData(batchHash []byte, data BlsData) error {
+	return nil
+}
+
 func (l *MockL2Node) BatchHash(batchHeader []byte) ([]byte, error) {
 	return tmhash.Sum(batchHeader), nil
 }

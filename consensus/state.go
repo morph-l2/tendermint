@@ -2249,9 +2249,40 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID, replay bool) (added bo
 			return
 		}
 
+		// check the bls signature before adding it to LastCommit
+		if len(vote.BlockID.BatchHash) > 0 {
+			if len(vote.BLSSignature) == 0 {
+				return
+			}
+			pubKey := cs.Validators.Validators[vote.ValidatorIndex].PubKey.Bytes()
+			valid, err := cs.l2Node.VerifySignature(pubKey, vote.BlockID.BatchHash, vote.BLSSignature)
+			if err != nil {
+				cs.Logger.Error("failed to verify bls signature", "err", err)
+				return false, nil
+			}
+			if !valid {
+				return false, fmt.Errorf("%v. sig: %x, batchHash: %x, tmKey: %x", ErrBLSSignatureInalvid, vote.BLSSignature, vote.BlockID.BatchHash, pubKey)
+			}
+		} else if len(vote.BLSSignature) > 0 {
+			return false, errors.New("should not have bls signature while the batchHash is empty")
+		}
+
 		added, err = cs.LastCommit.AddVote(vote)
 		if !added {
 			return
+		}
+
+		if len(vote.BlockID.BatchHash) > 0 {
+			_, val := cs.LastValidators.GetByAddress(vote.ValidatorAddress)
+			blsData := l2node.BlsData{
+				Signer:      val.PubKey.Bytes(),
+				Signature:   vote.BLSSignature,
+				VotingPower: val.VotingPower,
+			}
+
+			if err = cs.l2Node.AppendBlsData(vote.BlockID.BatchHash, blsData); err != nil {
+				cs.Logger.Error("failed to append blsData", "err", err)
+			}
 		}
 
 		cs.Logger.Debug("added vote to last precommits", "last_commit", cs.LastCommit.StringShort())

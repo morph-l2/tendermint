@@ -87,6 +87,8 @@ type Batcher interface {
 		currentTxs types.Txs,
 	) error
 
+	AppendBlsData(batchHash []byte, data BlsData) error
+
 	BatchHash(batchHeader []byte) ([]byte, error)
 }
 type GetFromBatchStartFunc func() (
