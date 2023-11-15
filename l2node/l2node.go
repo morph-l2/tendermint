@@ -79,6 +79,7 @@ type Batcher interface {
 	CommitBatch(
 		currentBlockBytes []byte,
 		currentTxs types.Txs,
+		blsDatas []BlsData,
 	) error
 
 	PackCurrentBlock(
@@ -95,16 +96,15 @@ type GetFromBatchStartFunc func() (
 	err error,
 )
 
-type Configs struct {
-	L2Config []byte
-	ZKConfig []byte
-	Root     []byte
+type ConsensusData struct {
+	ValidatorSet [][]byte
+	BatchHash    []byte
 }
 
-type ConsensusData struct {
-	ValidatorSet  [][]byte
-	BlsSigners    [][]byte
-	BlsSignatures [][]byte
+type BlsData struct {
+	Signer      []byte
+	Signature   []byte
+	VotingPower int64
 }
 
 func ConvertBytesToTxs(txs [][]byte) []types.Tx {
@@ -123,35 +123,19 @@ func ConvertTxsToBytes(txs []types.Tx) [][]byte {
 	return s
 }
 
-func GetBlsSigners(commit *types.Commit) (blsSigners []types.Address) {
+func GetBLSDatas(commit *types.Commit, validators *types.ValidatorSet) (blsDatas []BlsData, err error) {
 	for _, signature := range commit.Signatures {
 		if len(signature.BLSSignature) > 0 {
-			blsSigners = append(blsSigners, signature.ValidatorAddress)
-		}
-	}
-	return blsSigners
-}
-
-func GetBLSSignatures(commit *types.Commit) (blsSignatures [][]byte) {
-	for _, signature := range commit.Signatures {
-		if len(signature.BLSSignature) > 0 {
-			blsSignatures = append(blsSignatures, signature.BLSSignature)
-		}
-	}
-	return blsSignatures
-}
-
-func GetBLSData(commit *types.Commit, validators *types.ValidatorSet) (blsSigners, blsSignatures [][]byte, votingPowers []int64, err error) {
-	for _, signature := range commit.Signatures {
-		if len(signature.BLSSignature) > 0 {
-			blsSignatures = append(blsSignatures, signature.BLSSignature)
 			_, validator := validators.GetByAddress(signature.ValidatorAddress)
 			if validator == nil {
 				err = fmt.Errorf("no validator found by addresss: %x", signature.ValidatorAddress)
 				return
 			}
-			blsSigners = append(blsSigners, validator.PubKey.Bytes())
-			votingPowers = append(votingPowers, validator.VotingPower)
+			blsDatas = append(blsDatas, BlsData{
+				Signer:      validator.PubKey.Bytes(),
+				Signature:   signature.BLSSignature,
+				VotingPower: validator.VotingPower,
+			})
 		}
 	}
 	return

@@ -958,12 +958,7 @@ func NewNode(
 	if h < csHeight {
 		for i := h + 1; i < csHeight; i++ {
 			block := blockStore.LoadBlock(i)
-			blockNext := blockStore.LoadBlock(i + 1)
 			validators, err := stateStore.LoadValidators(h)
-			if err != nil {
-				panic(err)
-			}
-			blsSigners, blsSigs, _, err := l2node.GetBLSData(blockNext.LastCommit, validators)
 			if err != nil {
 				panic(err)
 			}
@@ -971,9 +966,8 @@ func NewNode(
 				l2node.ConvertTxsToBytes(block.Data.Txs),
 				block.Data.L2BlockMeta,
 				l2node.ConsensusData{
-					ValidatorSet:  validators.GetPubKeyBytesList(),
-					BlsSigners:    blsSigs,
-					BlsSignatures: blsSigners,
+					ValidatorSet: validators.GetPubKeyBytesList(),
+					BatchHash:    block.BatchHash,
 				},
 			); err != nil {
 				panic(err)
@@ -985,17 +979,12 @@ func NewNode(
 		if err != nil {
 			panic(err)
 		}
-		blsSigners, blsSigs, _, err := l2node.GetBLSData(blockStore.LoadSeenCommit(csHeight), validators)
-		if err != nil {
-			panic(err)
-		}
 		if _, _, err := node.ConsensusState().GetL2Node().DeliverBlock(
 			l2node.ConvertTxsToBytes(block.Data.Txs),
 			block.L2BlockMeta,
 			l2node.ConsensusData{
-				ValidatorSet:  validators.GetPubKeyBytesList(),
-				BlsSigners:    blsSigners,
-				BlsSignatures: blsSigs,
+				ValidatorSet: validators.GetPubKeyBytesList(),
+				BatchHash:    block.BatchHash,
 			},
 		); err != nil {
 			panic(err)

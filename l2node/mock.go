@@ -206,6 +206,7 @@ func (l *MockL2Node) SealBatch() ([]byte, []byte, error) {
 func (l *MockL2Node) CommitBatch(
 	currentBlockBytes []byte,
 	currentTxs types.Txs,
+	datas []BlsData,
 ) error {
 	if len(l.sealedBatchHeader) == 0 {
 		return nil

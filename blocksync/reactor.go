@@ -393,10 +393,6 @@ FOR_LOOP:
 			}
 
 			// make sure the block has valid batchHash and batchHeader, and has the enough valid BLS signatures if it is a batch point
-			var (
-				blsSigners, blsSigs [][]byte
-				votingPowers        []int64
-			)
 			if err == nil {
 				err = func() error {
 					// check the correctness of the relation of batchHash and batchHeader
@@ -412,26 +408,22 @@ FOR_LOOP:
 						return errors.New("batch hash can not exist when batchHeader is empty")
 					}
 
-					blsSigners, blsSigs, votingPowers, err = l2node.GetBLSData(second.LastCommit, state.Validators)
+					blsDatas, err := l2node.GetBLSDatas(second.LastCommit, state.Validators)
 					if err != nil {
 						return err
 					}
-					if len(blsSigners) != len(blsSigs) || len(blsSigners) != len(votingPowers) {
-						return errors.New("inconsistent length between blsSigners and blsSigs and votingPowers")
-					}
-
 					var validVotingPowers int64
-					if len(blsSigs) > 0 {
+					if len(blsDatas) > 0 {
 						if len(first.BatchHash) == 0 {
 							return errors.New("should not have bls signatures when batchHash is empty")
 						}
-						for i, blsSig := range blsSigs {
-							valid, err := bcR.l2Node.VerifySignature(blsSigners[i], first.BatchHash, blsSig)
+						for _, blsData := range blsDatas {
+							valid, err := bcR.l2Node.VerifySignature(blsData.Signer, first.BatchHash, blsData.Signature)
 							if err != nil {
 								return err
 							}
 							if valid {
-								validVotingPowers += votingPowers[i]
+								validVotingPowers += blsData.VotingPower
 							}
 						}
 						quorum := state.Validators.TotalVotingPower()*2/3 + 1
@@ -474,9 +466,8 @@ FOR_LOOP:
 				l2node.ConvertTxsToBytes(first.Data.Txs),
 				first.Data.L2BlockMeta,
 				l2node.ConsensusData{
-					ValidatorSet:  valPkBytesList,
-					BlsSigners:    blsSigners,
-					BlsSignatures: blsSigs,
+					ValidatorSet: valPkBytesList,
+					BatchHash:    first.BatchHash,
 				},
 			)
 			if err != nil {
