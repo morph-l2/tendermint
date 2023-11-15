@@ -1296,11 +1296,14 @@ func (cs *State) decideBatchPoint(l2BlockMeta tmbytes.HexBytes, txs types.Txs, b
 			// cs.getBatchStart promised we have batch data cached in cs.batchCache
 			parentBatchHeader = cs.batchCache.ParentBatchHeader
 			historicBlocks := cs.batchCache.BlocksSinceLastBatchPoint
-			for _, hb := range historicBlocks {
-				blocksMeta = append(blocksMeta, hb.L2BlockMeta)
-				transactions = append(transactions, hb.Txs)
+
+			blocksMeta = make([][]byte, len(historicBlocks))
+			transactions = make([]types.Txs, len(historicBlocks))
+			for i, hb := range historicBlocks {
+				blocksMeta[i] = hb.L2BlockMeta
+				transactions[i] = hb.Txs
 			}
-			cs.Logger.Info("fetching blocks since last batch point", "lastBatchPoint", batchStartHeight, "blockCount", len(historicBlocks))
+			cs.Logger.Info("fetching blocks since last batch point", "lastBatchPoint", batchStartHeight, "blockCount", len(historicBlocks), "transactionTotalCount", len(transactions))
 			return
 		})
 	if err != nil {
