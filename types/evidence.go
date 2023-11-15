@@ -234,7 +234,7 @@ func (l *LightClientAttackEvidence) Bytes() []byte {
 
 // GetByzantineValidators finds out what style of attack LightClientAttackEvidence was and then works out who
 // the malicious validators were and returns them. This is used both for forming the ByzantineValidators
-// field and for validating that it is correct. BlsSigners are ordered based on validator power
+// field and for validating that it is correct. Validators are ordered based on validator power
 func (l *LightClientAttackEvidence) GetByzantineValidators(commonVals *ValidatorSet,
 	trusted *SignedHeader) []*Validator {
 	var validators []*Validator

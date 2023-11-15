@@ -499,7 +499,7 @@ func (h *Header) StringIndented(indent string) string {
 %s  LastBlockID:    %v
 %s  LastCommit:     %v
 %s  Data:           %v
-%s  BlsSigners:     %v
+%s  Validators:     %v
 %s  NextValidators: %v
 %s  App:            %v
 %s  Consensus:      %v

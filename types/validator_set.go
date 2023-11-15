@@ -57,8 +57,8 @@ type ValidatorSet struct {
 }
 
 // NewValidatorSet initializes a ValidatorSet by copying over the values from
-// `valz`, a list of BlsSigners. If valz is nil or empty, the new ValidatorSet
-// will have an empty list of BlsSigners.
+// `valz`, a list of Validators. If valz is nil or empty, the new ValidatorSet
+// will have an empty list of Validators.
 //
 // The addresses of validators in `valz` must be unique otherwise the function
 // panics.
@@ -892,7 +892,7 @@ func (vals *ValidatorSet) StringIndented(indent string) string {
 	})
 	return fmt.Sprintf(`ValidatorSet{
 %s  Proposer: %v
-%s  BlsSigners:
+%s  Validators:
 %s    %v
 %s}`,
 		indent, vals.GetProposer().String(),

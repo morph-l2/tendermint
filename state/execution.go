@@ -536,7 +536,7 @@ func updateState(
 	State, error,
 ) {
 	// Copy the valset so we can apply changes from EndBlock
-	// and update s.LastValidators and s.BlsSigners.
+	// and update s.LastValidators and s.Validators.
 	nValSet := state.NextValidators.Copy()
 
 	lastHeightValsChanged := state.LastHeightValidatorsChanged
