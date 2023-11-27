@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	tmbytes "github.com/tendermint/tendermint/libs/bytes"
 	"io"
 	"os"
 	"runtime/debug"
 	"sort"
 	"time"
+
+	tmbytes "github.com/tendermint/tendermint/libs/bytes"
 
 	"github.com/cosmos/gogoproto/proto"
 	"github.com/tendermint/tendermint/blssignatures"
@@ -1838,6 +1839,7 @@ func (cs *State) finalizeCommit(height int64) {
 		panic(err)
 	}
 	valset := stateCopy.Validators.GetPubKeyBytesList()
+	nextValidators := stateCopy.NextValidators.GetPubKeyBytesList()
 	nextBatchParams, nextValidatorSet, err := cs.l2Node.DeliverBlock(
 		l2node.ConvertTxsToBytes(block.Data.Txs),
 		block.L2BlockMeta,
@@ -1875,7 +1877,7 @@ func (cs *State) finalizeCommit(height int64) {
 		},
 		block,
 		cs.blockExec.GetConsensusParamsUpdate(nextBatchParams, nil, nil, nil, nil),
-		cs.blockExec.GetValidatorUpdates(nextValidatorSet, valset),
+		cs.blockExec.GetValidatorUpdates(nextValidatorSet, nextValidators),
 	)
 	if err != nil {
 		logger.Error("failed to apply block", "err", err)
