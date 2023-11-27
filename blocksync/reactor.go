@@ -462,6 +462,7 @@ FOR_LOOP:
 			bcR.store.SaveBlock(first, firstParts, second.LastCommit)
 
 			valPkBytesList := state.Validators.GetPubKeyBytesList()
+			nextValPkBytesList := state.NextValidators.GetPubKeyBytesList()
 			nextBatchParams, nextValidatorSet, err := bcR.l2Node.DeliverBlock(
 				l2node.ConvertTxsToBytes(first.Data.Txs),
 				first.Data.L2BlockMeta,
@@ -481,7 +482,7 @@ FOR_LOOP:
 				firstID,
 				first,
 				bcR.blockExec.GetConsensusParamsUpdate(nextBatchParams, nil, nil, nil, nil),
-				bcR.blockExec.GetValidatorUpdates(nextValidatorSet, valPkBytesList),
+				bcR.blockExec.GetValidatorUpdates(nextValidatorSet, nextValPkBytesList),
 			)
 			if err != nil {
 				// TODO This is bad, are we zombie?
