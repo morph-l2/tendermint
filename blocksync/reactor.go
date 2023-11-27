@@ -475,7 +475,7 @@ FOR_LOOP:
 				firstID,
 				first,
 				bcR.blockExec.GetConsensusParamsUpdate(nextBatchParams, nil, nil, nil, nil),
-				bcR.blockExec.GetValidatorUpdates(nextValidatorSet, valset),
+				bcR.blockExec.GetValidatorUpdates(nextValidatorSet, state.NextValidators.GetPubKeyBytesList()),
 			)
 			if err != nil {
 				// TODO This is bad, are we zombie?
