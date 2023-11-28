@@ -87,7 +87,7 @@ type Batcher interface {
 		currentTxs types.Txs,
 	) error
 
-	AppendBlsData(batchHash []byte, data BlsData) error
+	AppendBlsData(height int64, batchHash []byte, data BlsData) error
 
 	BatchHash(batchHeader []byte) ([]byte, error)
 }

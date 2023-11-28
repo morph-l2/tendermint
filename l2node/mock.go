@@ -237,7 +237,7 @@ func (l *MockL2Node) PackCurrentBlock(
 	return nil
 }
 
-func (l *MockL2Node) AppendBlsData(batchHash []byte, data BlsData) error {
+func (l *MockL2Node) AppendBlsData(height int64, batchHash []byte, data BlsData) error {
 	return nil
 }
 

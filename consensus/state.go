@@ -2282,7 +2282,7 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID, replay bool) (added bo
 				VotingPower: val.VotingPower,
 			}
 
-			if err = cs.l2Node.AppendBlsData(vote.BlockID.BatchHash, blsData); err != nil {
+			if err = cs.l2Node.AppendBlsData(vote.Height, vote.BlockID.BatchHash, blsData); err != nil {
 				cs.Logger.Error("failed to append blsData", "err", err)
 			}
 		}
