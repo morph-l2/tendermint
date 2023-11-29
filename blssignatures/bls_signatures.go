@@ -11,8 +11,8 @@ import (
 )
 
 type PublicKey struct {
-	key           *bls12381.PointG2
-	validityProof *bls12381.PointG1 // if this is nil, key came from a trusted source
+	Key           *bls12381.PointG2
+	ValidityProof *bls12381.PointG1 // if this is nil, key came from a trusted source
 }
 
 type PrivateKey *big.Int
@@ -86,10 +86,10 @@ func NewTrustedPublicKey(pubKey *bls12381.PointG2) PublicKey {
 }
 
 func (pubKey PublicKey) ToTrusted() PublicKey {
-	if pubKey.validityProof == nil {
+	if pubKey.ValidityProof == nil {
 		return pubKey
 	}
-	return NewTrustedPublicKey(pubKey.key)
+	return NewTrustedPublicKey(pubKey.Key)
 }
 
 func SignMessage(priv PrivateKey, message []byte) (Signature, error) {
@@ -119,7 +119,7 @@ func verifySignature2(sig Signature, message []byte, publicKey PublicKey, keyVal
 
 	engine := bls12381.NewPairingEngine()
 	engine.Reset()
-	engine.AddPair(pointOnCurve, publicKey.key)
+	engine.AddPair(pointOnCurve, publicKey.Key)
 	leftSide := engine.Result()
 	engine.AddPair(sig, engine.G2.One())
 	rightSide := engine.Result()
@@ -130,7 +130,7 @@ func AggregatePublicKeys(pubKeys []PublicKey) PublicKey {
 	g2 := bls12381.NewG2()
 	ret := g2.Zero()
 	for _, pk := range pubKeys {
-		g2.Add(ret, ret, pk.key)
+		g2.Add(ret, ret, pk.Key)
 	}
 	return NewTrustedPublicKey(ret)
 }
@@ -160,7 +160,7 @@ func VerifyAggregatedSignatureDifferentMessages(sig Signature, messages [][]byte
 		if err != nil {
 			return false, err
 		}
-		engine.AddPair(pointOnCurve, pubKeys[i].key)
+		engine.AddPair(pointOnCurve, pubKeys[i].Key)
 	}
 	leftSide := engine.Result()
 
@@ -189,11 +189,11 @@ func hashToG1Curve(message []byte, keyValidationMode bool) (*bls12381.PointG1, e
 
 func PublicKeyToBytes(pub PublicKey) []byte {
 	g2 := bls12381.NewG2()
-	if pub.validityProof == nil {
-		return append([]byte{0}, g2.ToBytes(pub.key)...)
+	if pub.ValidityProof == nil {
+		return append([]byte{0}, g2.ToBytes(pub.Key)...)
 	} else {
-		keyBytes := g2.ToBytes(pub.key)
-		sigBytes := SignatureToBytes(pub.validityProof)
+		keyBytes := g2.ToBytes(pub.Key)
+		sigBytes := SignatureToBytes(pub.ValidityProof)
 		if len(sigBytes) > 255 {
 			panic("validity proof too large to serialize")
 		}

@@ -11,10 +11,17 @@ option (gogoproto.equal_all) = true;
 // ConsensusParams contains consensus critical parameters that determine the
 // validity of blocks.
 message ConsensusParams {
-  BlockParams     block     = 1;
-  EvidenceParams  evidence  = 2;
-  ValidatorParams validator = 3;
-  VersionParams   version   = 4;
+  BatchParams     batch     = 1;
+  BlockParams     block     = 2;
+  EvidenceParams  evidence  = 3;
+  ValidatorParams validator = 4;
+  VersionParams   version   = 5;
+}
+
+message BatchParams {
+  int64                    blocks_interval = 1;
+  int64                    max_bytes       = 2;
+  google.protobuf.Duration timeout         = 3 [(gogoproto.nullable) = false, (gogoproto.stdduration) = true];
 }
 
 // BlockParams contains limits on the block size.

@@ -1,17 +1,20 @@
 package state
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"time"
 
 	abci "github.com/tendermint/tendermint/abci/types"
 	cfg "github.com/tendermint/tendermint/config"
+	"github.com/tendermint/tendermint/crypto/ed25519"
 	cryptoenc "github.com/tendermint/tendermint/crypto/encoding"
 	"github.com/tendermint/tendermint/l2node"
 	"github.com/tendermint/tendermint/libs/fail"
 	"github.com/tendermint/tendermint/libs/log"
 	tmstate "github.com/tendermint/tendermint/proto/tendermint/state"
+	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/proxy"
 	"github.com/tendermint/tendermint/types"
 )
@@ -103,8 +106,10 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 	state State,
 	commit *types.Commit,
 	proposerAddr []byte,
-) (*types.Block, error) {
-
+	decideBatchPoint decideBatchPointFunc,
+) (
+	*types.Block, error,
+) {
 	maxBytes := state.ConsensusParams.Block.MaxBytes
 	// maxGas := state.ConsensusParams.Block.MaxGas
 
@@ -114,43 +119,30 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 	maxDataBytes := types.MaxDataBytes(maxBytes, evSize, state.Validators.Size())
 
 	var txs [][]byte
-	var l2Config []byte
-	var zkConfig []byte
-	var root []byte
+	var blockMeta []byte
 	var err error
 	if config.WaitForTxs() {
-		blockData := blockExec.notifier.GetBlockData()
+		blockData := blockExec.notifier.WaitForBlockData()
 		if blockData != nil && blockData.Height == height {
-			txs, l2Config, zkConfig, root = blockData.Txs, blockData.L2Config, blockData.ZKConfig, blockData.Root
-			blockExec.notifier.CleanBlockData()
+			txs = blockData.Txs
+			blockMeta = blockData.Meta
 		} else {
-			txs, l2Config, zkConfig, root, err = l2Node.RequestBlockData(height)
+			txs, blockMeta, _, err = l2Node.RequestBlockData(height)
 			if err != nil {
 				// return nil, err
 				panic(err)
 			}
-			// fmt.Println("============================================================")
-			// fmt.Println("RequestBlockData")
-			// fmt.Println(height)
-			// fmt.Println(hex.EncodeToString(l2Config))
-			// fmt.Println(hex.EncodeToString(zkConfig))
-			// fmt.Println("============================================================")
 		}
+		blockExec.notifier.CleanBlockData()
 	} else {
-		txs, l2Config, zkConfig, root, err = l2Node.RequestBlockData(height)
+		txs, blockMeta, _, err = l2Node.RequestBlockData(height)
 		if err != nil {
 			// return nil, err
 			panic(err)
 		}
-		// fmt.Println("============================================================")
-		// fmt.Println("RequestBlockData")
-		// fmt.Println(height)
-		// fmt.Println(hex.EncodeToString(l2Config))
-		// fmt.Println(hex.EncodeToString(zkConfig))
-		// fmt.Println("============================================================")
 	}
 
-	block := state.MakeBlock(height, l2node.ConvertBytesToTxs(txs), l2Config, zkConfig, root, commit, evidence, proposerAddr)
+	block := state.MakeBlock(height, l2node.ConvertBytesToTxs(txs), blockMeta, commit, evidence, proposerAddr, nil) // set 'decideBatchPoint' to nil here to prevent duplicated execution.
 
 	localLastCommit := buildLastCommitInfo(block, blockExec.store, state.InitialHeight)
 	rpp, err := blockExec.proxyApp.PrepareProposalSync(
@@ -178,7 +170,7 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 		return nil, err
 	}
 
-	return state.MakeBlock(height, txl, l2Config, zkConfig, root, commit, evidence, proposerAddr), nil
+	return state.MakeBlock(height, txl, blockMeta, commit, evidence, proposerAddr, decideBatchPoint), nil
 }
 
 func (blockExec *BlockExecutor) ProcessProposal(
@@ -223,58 +215,34 @@ func (blockExec *BlockExecutor) ValidateBlock(state State, block *types.Block) e
 // from outside this package to process and commit an entire block.
 // It takes a blockID to avoid recomputing the parts hash.
 func (blockExec *BlockExecutor) ApplyBlock(
-	state State, blockID types.BlockID, block *types.Block,
+	state State,
+	blockID types.BlockID,
+	block *types.Block,
+	consensusParamUpdates *tmproto.ConsensusParams,
+	validatorUpdates []*types.Validator,
 ) (
 	State, int64, error,
 ) {
-	if err := validateBlock(state, block); err != nil {
+	err := validateBlock(state, block)
+	if err != nil {
 		return state, 0, ErrInvalidBlock(err)
 	}
 
-	startTime := time.Now().UnixNano()
-	abciResponses, err := execBlockOnProxyApp(
-		blockExec.logger, blockExec.proxyApp, block, blockExec.store, state.InitialHeight,
-	)
-	endTime := time.Now().UnixNano()
-	blockExec.metrics.BlockProcessingTime.Observe(float64(endTime-startTime) / 1000000)
-	if err != nil {
-		return state, 0, ErrProxyAppConn(err)
-	}
-
-	fail.Fail() // XXX
-
-	// Save the results before we commit.
-	if err := blockExec.store.SaveABCIResponses(block.Height, abciResponses); err != nil {
-		return state, 0, err
-	}
-
-	fail.Fail() // XXX
-
-	// validate the validator updates and convert to tendermint types
-	abciValUpdates := abciResponses.EndBlock.ValidatorUpdates
-	if err = validateValidatorUpdates(abciValUpdates, state.ConsensusParams.Validator); err != nil {
-		return state, 0, fmt.Errorf("error in validator updates: %v", err)
-	}
-
-	validatorUpdates, err := types.PB2TM.ValidatorUpdates(abciValUpdates)
-	if err != nil {
-		return state, 0, err
-	}
 	if len(validatorUpdates) > 0 {
 		blockExec.logger.Debug("updates to validators", "updates", types.ValidatorListString(validatorUpdates))
 		blockExec.metrics.ValidatorSetUpdates.Add(1)
 	}
-	if abciResponses.EndBlock.ConsensusParamUpdates != nil {
+	if consensusParamUpdates != nil {
 		blockExec.metrics.ConsensusParamUpdates.Add(1)
 	}
 
 	// Update the state with the block and responses.
-	state, err = updateState(state, blockID, &block.Header, abciResponses, validatorUpdates)
+	state, err = updateState(state, blockID, &block.Header, consensusParamUpdates, validatorUpdates)
 	if err != nil {
 		return state, 0, fmt.Errorf("commit failed for application: %v", err)
 	}
 
-	appHash, retainHeight, err := blockExec.Commit(state, block, abciResponses.DeliverTxs)
+	appHash, retainHeight, err := blockExec.Commit(state, block)
 	if err != nil {
 		return state, 0, fmt.Errorf("commit failed for application: %v", err)
 	}
@@ -294,18 +262,90 @@ func (blockExec *BlockExecutor) ApplyBlock(
 
 	// Events are fired after everything else.
 	// NOTE: if we crash between Commit and Save, events wont be fired during replay
-	fireEvents(blockExec.logger, blockExec.eventBus, block, abciResponses, validatorUpdates)
+	// fireEvents(blockExec.logger, blockExec.eventBus, block, abciResponses, validatorUpdates)
 
 	return state, retainHeight, nil
+}
+
+func (blockExec *BlockExecutor) GetConsensusParamsUpdate(
+	nextBatchParams *tmproto.BatchParams,
+	block *tmproto.BlockParams,
+	evidence *tmproto.EvidenceParams,
+	validator *tmproto.ValidatorParams,
+	version *tmproto.VersionParams,
+) *tmproto.ConsensusParams {
+	if nextBatchParams == nil && block == nil && evidence == nil && validator == nil && version == nil {
+		return nil
+	}
+	return &tmproto.ConsensusParams{
+		Batch:     nextBatchParams,
+		Block:     block,
+		Evidence:  evidence,
+		Validator: validator,
+		Version:   version,
+	}
+}
+
+func (blockExec *BlockExecutor) GetValidatorUpdates(
+	nextValidatorSet [][]byte,
+	validatorSet [][]byte,
+) (
+	validatorUpdates []*types.Validator,
+) {
+	// search new valdator
+	for _, nVal := range nextValidatorSet {
+		exist := false
+		for _, val := range validatorSet {
+			if bytes.Equal(nVal, val) {
+				exist = true
+				break
+			}
+		}
+		if !exist {
+			pubkey := ed25519.PubKey(nVal)
+			validatorUpdates = append(
+				validatorUpdates,
+				&types.Validator{
+					Address:          pubkey.Address(),
+					PubKey:           pubkey,
+					VotingPower:      1,
+					ProposerPriority: 0,
+				},
+			)
+		}
+	}
+	// search validator removed
+	for _, val := range validatorSet {
+		exist := false
+		for _, nVal := range nextValidatorSet {
+			if bytes.Equal(val, nVal) {
+				exist = true
+				break
+			}
+		}
+		if !exist {
+			pubkey := ed25519.PubKey(val)
+			validatorUpdates = append(
+				validatorUpdates,
+				&types.Validator{
+					Address:          pubkey.Address(),
+					PubKey:           pubkey,
+					VotingPower:      0,
+					ProposerPriority: 0,
+				},
+			)
+		}
+	}
+	return
 }
 
 // It returns the result of calling abci.Commit (the AppHash) and the height to retain (if any).
 func (blockExec *BlockExecutor) Commit(
 	state State,
 	block *types.Block,
-	deliverTxResponses []*abci.ResponseDeliverTx,
-) ([]byte, int64, error) {
-
+) (
+	[]byte, int64, error,
+) {
 	// Commit block, get hash back
 	res, err := blockExec.proxyApp.CommitSync()
 	if err != nil {
@@ -490,19 +530,18 @@ func updateState(
 	state State,
 	blockID types.BlockID,
 	header *types.Header,
-	abciResponses *tmstate.ABCIResponses,
+	consensusParamUpdates *tmproto.ConsensusParams,
 	validatorUpdates []*types.Validator,
-) (State, error) {
-
+) (
+	State, error,
+) {
 	// Copy the valset so we can apply changes from EndBlock
 	// and update s.LastValidators and s.Validators.
 	nValSet := state.NextValidators.Copy()
 
-	// Update the validator set with the latest abciResponses.
 	lastHeightValsChanged := state.LastHeightValidatorsChanged
 	if len(validatorUpdates) > 0 {
-		err := nValSet.UpdateWithChangeSet(validatorUpdates)
-		if err != nil {
+		if err := nValSet.UpdateWithChangeSet(validatorUpdates); err != nil {
 			return state, fmt.Errorf("error changing validator set: %v", err)
 		}
 		// Change results from this height but only applies to the next next height.
@@ -512,12 +551,11 @@ func updateState(
 	// Update validator proposer priority and set state variables.
 	nValSet.IncrementProposerPriority(1)
 
-	// Update the params with the latest abciResponses.
 	nextParams := state.ConsensusParams
 	lastHeightParamsChanged := state.LastHeightConsensusParamsChanged
-	if abciResponses.EndBlock.ConsensusParamUpdates != nil {
+	if consensusParamUpdates != nil {
 		// NOTE: must not mutate s.ConsensusParams
-		nextParams = state.ConsensusParams.Update(abciResponses.EndBlock.ConsensusParamUpdates)
+		nextParams = state.ConsensusParams.Update(consensusParamUpdates)
 		err := nextParams.ValidateBasic()
 		if err != nil {
 			return state, fmt.Errorf("error updating consensus params: %v", err)
@@ -546,7 +584,7 @@ func updateState(
 		LastHeightValidatorsChanged:      lastHeightValsChanged,
 		ConsensusParams:                  nextParams,
 		LastHeightConsensusParamsChanged: lastHeightParamsChanged,
-		LastResultsHash:                  ABCIResponsesResultsHash(abciResponses),
+		LastResultsHash:                  nil,
 		AppHash:                          state.AppHash,
 	}, nil
 }

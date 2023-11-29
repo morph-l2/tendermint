@@ -285,6 +285,13 @@ func (vals *ValidatorSet) GetByIndex(index int32) (address []byte, val *Validato
 	return val.Address, val.Copy()
 }
 
+func (vals *ValidatorSet) GetPubKeyBytesList() (pkBytesList [][]byte) {
+	for _, val := range vals.Validators {
+		pkBytesList = append(pkBytesList, val.PubKey.Bytes())
+	}
+	return
+}
+
 // Size returns the length of the validator set.
 func (vals *ValidatorSet) Size() int {
 	return len(vals.Validators)

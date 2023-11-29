@@ -1,29 +1,34 @@
 package l2node
 
 import (
-	"fmt"
+	"sync"
 	"time"
+
+	"github.com/tendermint/tendermint/libs/log"
 )
 
 type BlockData struct {
-	Height   int64
-	Txs      [][]byte
-	L2Config []byte
-	ZKConfig []byte
-	Root     []byte
+	Height int64
+	Txs    [][]byte
+	Meta   []byte
 }
 
 type Notifier struct {
 	txsAvailable chan struct{}
 	blockData    *BlockData
 	l2Node       L2Node
+
+	wg     sync.WaitGroup
+	logger log.Logger
 }
 
-func NewNotifier(l2Node L2Node) *Notifier {
+func NewNotifier(l2Node L2Node, logger log.Logger) *Notifier {
 	return &Notifier{
 		txsAvailable: make(chan struct{}, 1),
 		blockData:    nil,
 		l2Node:       l2Node,
+		wg:           sync.WaitGroup{},
+		logger:       logger,
 	}
 }
 
@@ -32,27 +37,21 @@ func (n *Notifier) TxsAvailable() <-chan struct{} {
 }
 
 func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time.Duration) {
+	n.wg.Add(1)
 	if createEmptyBlocksInterval == 0 {
 		go func() {
+			defer n.wg.Done()
 			for {
-				txs, l2Config, zkConfig, root, err := n.l2Node.RequestBlockData(height)
+				txs, metaData, collectedL1Msgs, err := n.l2Node.RequestBlockData(height)
 				if err != nil {
-					fmt.Println("ERROR:", err.Error())
+					n.logger.Error("failed to call l2Node.RequestBlockData", "err", err)
 					return
 				}
-				// fmt.Println("============================================================")
-				// fmt.Println("RequestBlockData")
-				// fmt.Println(height)
-				// fmt.Println(hex.EncodeToString(l2Config))
-				// fmt.Println(hex.EncodeToString(zkConfig))
-				// fmt.Println("============================================================")
-				if len(txs) > 0 {
+				if len(txs) > 0 || collectedL1Msgs {
 					n.blockData = &BlockData{
-						Height:   height,
-						Txs:      txs,
-						L2Config: l2Config,
-						ZKConfig: zkConfig,
-						Root:     root,
+						Height: height,
+						Txs:    txs,
+						Meta:   metaData,
 					}
 					n.txsAvailable <- struct{}{}
 					return
@@ -63,29 +62,22 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 	} else {
 		timeout := time.After(createEmptyBlocksInterval)
 		go func() {
+			defer n.wg.Done()
 			for {
 				select {
 				case <-timeout:
 					return
 				default:
-					txs, l2Config, zkConfig, root, err := n.l2Node.RequestBlockData(height)
+					txs, metaData, collectedL1Msgs, err := n.l2Node.RequestBlockData(height)
 					if err != nil {
-						fmt.Println("ERROR:", err.Error())
+						n.logger.Error("failed to call l2Node.RequestBlockData", "err", err)
 						return
 					}
-					// fmt.Println("============================================================")
-					// fmt.Println("RequestBlockData")
-					// fmt.Println(height)
-					// fmt.Println(hex.EncodeToString(l2Config))
-					// fmt.Println(hex.EncodeToString(zkConfig))
-					// fmt.Println("============================================================")
-					if len(txs) > 0 {
+					if len(txs) > 0 || collectedL1Msgs {
 						n.blockData = &BlockData{
-							Height:   height,
-							Txs:      txs,
-							L2Config: l2Config,
-							ZKConfig: zkConfig,
-							Root:     root,
+							Height: height,
+							Txs:    txs,
+							Meta:   metaData,
 						}
 						n.txsAvailable <- struct{}{}
 						return
@@ -98,6 +90,11 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 }
 
 func (n *Notifier) GetBlockData() *BlockData {
+	return n.blockData
+}
+
+func (n *Notifier) WaitForBlockData() *BlockData {
+	n.wg.Wait()
 	return n.blockData
 }
 

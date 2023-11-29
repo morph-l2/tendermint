@@ -1,78 +1,98 @@
 package consensus
 
 import (
+	"github.com/tendermint/tendermint/crypto/tmhash"
 	"time"
 
-	ethcrypto "github.com/scroll-tech/go-ethereum/crypto"
 	"github.com/tendermint/tendermint/types"
 )
 
+// batchData is used to store the cached batchHash/batchHeader mapping to blockHash, preventing duplicated calculation
+type batchData struct {
+	batchHash   []byte
+	batchHeader []byte
+}
+
+type BatchCache struct {
+	BatchStartHeight          int64
+	BatchStartTime            time.Time
+	ParentBatchHeader         []byte
+	BlocksSinceLastBatchPoint []*types.Block // Notice: order by desc
+
+	BatchHashes map[[tmhash.Size]byte]batchData // blockHash -> batchData
+}
+
+func NewBatchCache() *BatchCache {
+	return &BatchCache{
+		ParentBatchHeader:         make([]byte, 0),
+		BlocksSinceLastBatchPoint: make([]*types.Block, 0),
+		BatchHashes:               make(map[[tmhash.Size]byte]batchData),
+	}
+}
+
+func (bc *BatchCache) UpdateStartPoint(block *types.Block) {
+	bc.BatchStartHeight = block.Height
+	bc.BatchStartTime = block.Time
+	bc.ParentBatchHeader = block.L2BatchHeader
+	bc.BlocksSinceLastBatchPoint = []*types.Block{block}
+}
+
+func (bc *BatchCache) AppendBlock(block *types.Block) {
+	bc.BlocksSinceLastBatchPoint = append(bc.BlocksSinceLastBatchPoint, block)
+}
+
+func (bc *BatchCache) StoreBatchData(blockHash []byte, batchHash []byte, batchHeader []byte) {
+	var blockHashKey [tmhash.Size]byte
+	copy(blockHashKey[:], blockHash)
+
+	bc.BatchHashes[blockHashKey] = batchData{
+		batchHash:   batchHash,
+		batchHeader: batchHeader,
+	}
+}
+
+func (bc *BatchCache) ClearBatchData() {
+	bc.BatchHashes = make(map[[tmhash.Size]byte]batchData)
+}
+
+func (bc *BatchCache) batchData(blockHash []byte) (batchData batchData, found bool) {
+	var blockHashKey [tmhash.Size]byte
+	copy(blockHashKey[:], blockHash)
+	batchData, found = bc.BatchHashes[blockHashKey]
+	return
+}
+
 // currentHeight should be greater than InitialHeight
 func (cs *State) getBatchStart() (int64, time.Time) {
-	prHeight := cs.ProposalBlock.LastCommit.Height
-	if checkBLS(cs.ProposalBlock.LastCommit.Signatures) {
-		return prHeight, cs.blockStore.LoadBlock(prHeight).Time
+	if cs.batchCache != nil && cs.batchCache.BatchStartHeight != 0 {
+		return cs.batchCache.BatchStartHeight, cs.batchCache.BatchStartTime
 	}
-	for i := prHeight; ; i-- {
+	if cs.batchCache == nil {
+		cs.batchCache = NewBatchCache()
+	}
+
+	if cs.Height == cs.state.InitialHeight { // use genesis block as the first batch point
+		return 0, cs.StartTime
+	}
+
+	var blocksByDesc []*types.Block // stores the blocks from last batch point block(which is not included) to now
+	for i := cs.Height - 1; i >= cs.state.InitialHeight; i-- {
+		block := cs.blockStore.LoadBlock(i)
+		if block.IsBatchPoint() {
+			cs.batchCache.UpdateStartPoint(block)
+			break
+		}
 		if i == cs.state.InitialHeight {
-			return i, cs.blockStore.LoadBlock(i).Time
+			cs.batchCache.UpdateStartPoint(block)
+			break
 		}
-		block := cs.blockStore.LoadBlock(i)
-		if checkBLS(block.LastCommit.Signatures) {
-			preBlock := cs.blockStore.LoadBlock(i - 1)
-			return preBlock.Height, preBlock.Time
-		}
+		blocksByDesc = append(blocksByDesc, block)
 	}
-}
 
-func (cs *State) isBatchPoint(batchStartHeight int64, batchSize int, batchStartTime time.Time) bool {
-	// batch_blocks_interval, batch_max_bytes and batch_timeout can't be all 0
-	// block_interval || max_bytes || timeout
-	return (cs.config.BatchBlocksInterval > 0 && cs.ProposalBlock.Height-batchStartHeight >= cs.config.BatchBlocksInterval) ||
-		(cs.config.BatchMaxBytes > 0 && batchSize >= int(cs.config.BatchMaxBytes)) ||
-		(cs.config.BatchTimeout > 0 && cs.ProposalBlock.Time.Sub(batchStartTime) >= cs.config.BatchTimeout)
-}
-
-func (cs *State) batchData(batchStartHeight int64) (zkConfigContext []byte, rawBatchTxs [][]byte, root []byte) {
-	for i := batchStartHeight; i < cs.ProposalBlock.Height; i++ {
-		block := cs.blockStore.LoadBlock(i)
-		zkConfigContext = append(zkConfigContext, block.Data.ZkConfig...)
-		for _, tx := range block.Data.Txs {
-			rawBatchTxs = append(rawBatchTxs, tx)
-		}
+	// reverse `blocksByDesc`, and append them to batch cache
+	for i := len(blocksByDesc) - 1; i >= 0; i-- {
+		cs.batchCache.AppendBlock(blocksByDesc[i])
 	}
-	root = cs.blockStore.LoadBlock(cs.ProposalBlock.Height - 1).Data.Root
-	return
-}
 
-func (cs *State) batchContext(zkConfigContext []byte, encodedTxs []byte, root []byte) []byte {
-	return append(append(zkConfigContext, encodedTxs...), root...)
-}
-
-func (cs *State) batchContextHash(batchContext []byte) []byte {
-	return ethcrypto.Keccak256(batchContext)
-}
-
-func (cs *State) proposalBlockRawTxs() (rawTxs [][]byte) {
-	for _, tx := range cs.ProposalBlock.Data.Txs {
-		rawTxs = append(rawTxs, tx)
-	}
-	return
-}
-
-func checkBLS(signatures []types.CommitSig) bool {
-	for _, sig := range signatures {
-		if len(sig.BLSSignature) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func txsSize(batchTxs [][]byte) int {
-	sum := 0
-	for _, tx := range batchTxs {
-		sum += len(tx)
-	}
-	return sum
+	return cs.batchCache.BatchStartHeight, cs.batchCache.BatchStartTime
 }

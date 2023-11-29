@@ -200,6 +200,15 @@ func (vote *Vote) ValidateBasic() error {
 		return fmt.Errorf("signature is too big (max: %d)", MaxSignatureSize)
 	}
 
+	if len(vote.BlockID.BatchHash) == 0 && len(vote.BLSSignature) > 0 {
+		return errors.New("blsSignature cannot exist when batchHash is emtpy")
+	}
+
+	// only check it if it is `precommit` vote; no need to sign a bls signature during `prevote`
+	if vote.Type == tmproto.PrecommitType && len(vote.BlockID.BatchHash) > 0 && len(vote.BLSSignature) == 0 {
+		return errors.New("blsSignature must exist when batchHash is not emtpy")
+	}
+
 	return nil
 }
 

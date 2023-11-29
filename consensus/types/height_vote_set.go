@@ -186,7 +186,8 @@ func (hvs *HeightVoteSet) SetPeerMaj23(
 	round int32,
 	voteType tmproto.SignedMsgType,
 	peerID p2p.ID,
-	blockID types.BlockID) error {
+	blockID types.BlockID,
+) error {
 	hvs.mtx.Lock()
 	defer hvs.mtx.Unlock()
 	if !types.IsVoteTypeValid(voteType) {

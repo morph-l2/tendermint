@@ -1,6 +1,8 @@
 package blocksync
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -380,16 +382,59 @@ FOR_LOOP:
 				break FOR_LOOP
 			}
 			firstPartSetHeader := firstParts.Header()
-			firstID := types.BlockID{Hash: first.Hash(), PartSetHeader: firstPartSetHeader}
+			firstID := types.BlockID{Hash: first.Hash(), BatchHash: first.BatchHash, PartSetHeader: firstPartSetHeader}
 			// Finally, verify the first block using the second's commit
 			// NOTE: we can probably make this more efficient, but note that calling
 			// first.Hash() doesn't verify the tx contents, so MakePartSet() is
 			// currently necessary.
-			err = state.Validators.VerifyCommitLight(chainID, firstID, first.Height, second.LastCommit)
-
-			if err == nil {
+			if err = state.Validators.VerifyCommitLight(chainID, firstID, first.Height, second.LastCommit); err == nil {
 				// validate the block before we persist it
 				err = bcR.blockExec.ValidateBlock(state, first)
+			}
+
+			// make sure the block has valid batchHash and batchHeader, and has the enough valid BLS signatures if it is a batch point
+			if err == nil {
+				err = func() error {
+					// check the correctness of the relation of batchHash and batchHeader
+					if len(first.L2BatchHeader) > 0 {
+						batchHash, hashErr := bcR.l2Node.BatchHash(first.L2BatchHeader)
+						if hashErr != nil {
+							return hashErr
+						}
+						if !bytes.Equal(first.BatchHash, batchHash) {
+							return fmt.Errorf("wrong batchHash. expectedHash: %x, actualHash: %x, batchHeader: %x", batchHash, first.BatchHash, first.L2BatchHeader)
+						}
+					} else if len(first.BatchHash) > 0 {
+						return errors.New("batch hash can not exist when batchHeader is empty")
+					}
+
+					blsDatas, err := l2node.GetBLSDatas(second.LastCommit, state.Validators)
+					if err != nil {
+						return err
+					}
+					var validVotingPowers int64
+					if len(blsDatas) > 0 {
+						if len(first.BatchHash) == 0 {
+							return errors.New("should not have bls signatures when batchHash is empty")
+						}
+						for _, blsData := range blsDatas {
+							valid, err := bcR.l2Node.VerifySignature(blsData.Signer, first.BatchHash, blsData.Signature)
+							if err != nil {
+								return err
+							}
+							if valid {
+								validVotingPowers += blsData.VotingPower
+							}
+						}
+						quorum := state.Validators.TotalVotingPower()*2/3 + 1
+						if validVotingPowers < quorum {
+							return fmt.Errorf("not enough votingPowers of valid bls signature. quorum: %d, valid votingPower: %d", quorum, validVotingPowers)
+						}
+					} else if len(first.BatchHash) > 0 {
+						return errors.New("must have bls signatures when batchHash is not empty")
+					}
+					return nil
+				}()
 			}
 
 			if err != nil {
@@ -416,27 +461,29 @@ FOR_LOOP:
 			// TODO: batch saves so we dont persist to disk every block
 			bcR.store.SaveBlock(first, firstParts, second.LastCommit)
 
-			// TODO: only for test
-			if len(first.Data.L2Config) == 0 || len(first.Data.ZkConfig) == 0 || len(first.Data.Root) == 0 {
-				panic("error1: nil config")
-			}
-			if len(l2node.GetValidators(second.LastCommit)) == 0 || len(l2node.GetBLSSignatures(second.LastCommit)) == 0 {
-				panic("error1: nil sig or val")
-			}
-
-			if err := bcR.l2Node.DeliverBlock(
+			valPkBytesList := state.Validators.GetPubKeyBytesList()
+			nextValPkBytesList := state.NextValidators.GetPubKeyBytesList()
+			nextBatchParams, nextValidatorSet, err := bcR.l2Node.DeliverBlock(
 				l2node.ConvertTxsToBytes(first.Data.Txs),
-				first.Data.L2Config,
-				first.Data.ZkConfig,
-				l2node.GetValidators(second.LastCommit),
-				l2node.GetBLSSignatures(second.LastCommit),
-			); err != nil {
+				first.Data.L2BlockMeta,
+				l2node.ConsensusData{
+					ValidatorSet: valPkBytesList,
+					BatchHash:    first.BatchHash,
+				},
+			)
+			if err != nil {
 				panic(err)
 			}
 
 			// TODO: same thing for app - but we would need a way to
 			// get the hash without persisting the state
-			state, _, err = bcR.blockExec.ApplyBlock(state, firstID, first)
+			state, _, err = bcR.blockExec.ApplyBlock(
+				state,
+				firstID,
+				first,
+				bcR.blockExec.GetConsensusParamsUpdate(nextBatchParams, nil, nil, nil, nil),
+				bcR.blockExec.GetValidatorUpdates(nextValidatorSet, nextValPkBytesList),
+			)
 			if err != nil {
 				// TODO This is bad, are we zombie?
 				panic(fmt.Sprintf("Failed to process committed block (%d:%X): %v", first.Height, first.Hash(), err))

@@ -79,7 +79,7 @@ func (cs *State) readReplayMessage(msg *TimedWALMessage, newStepSub types.Subscr
 				"blockID", v.BlockID, "peer", peerID)
 		}
 
-		cs.handleMsg(m)
+		cs.handleMsg(m, true)
 	case timeoutInfo:
 		cs.Logger.Info("Replay: Timeout", "height", m.Height, "round", m.Round, "step", m.Step, "dur", m.Duration)
 		cs.handleTimeout(m, cs.RoundState)
@@ -503,7 +503,7 @@ func (h *Handshaker) replayBlock(state sm.State, height int64, proxyApp proxy.Ap
 	blockExec.SetEventBus(h.eventBus)
 
 	var err error
-	state, _, err = blockExec.ApplyBlock(state, meta.BlockID, block)
+	state, _, err = blockExec.ApplyBlock(state, meta.BlockID, block, nil, nil)
 	if err != nil {
 		return sm.State{}, err
 	}

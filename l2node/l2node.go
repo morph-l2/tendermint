@@ -1,10 +1,13 @@
 package l2node
 
 import (
+	"fmt"
+	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/types"
 )
 
 type L2Node interface {
+	Batcher
 	RequestHeight(
 		tmHeight int64,
 	) (
@@ -23,17 +26,14 @@ type L2Node interface {
 		height int64,
 	) (
 		txs [][]byte,
-		l2Config []byte,
-		zkConfig []byte,
-		root []byte,
+		blockMeta []byte,
+		collectedL1Msgs bool,
 		err error,
 	)
 
 	CheckBlockData(
 		txs [][]byte,
-		l2Config []byte,
-		zkConfig []byte,
-		root []byte,
+		blockMeta []byte,
 	) (
 		valid bool,
 		err error,
@@ -41,13 +41,72 @@ type L2Node interface {
 
 	DeliverBlock(
 		txs [][]byte,
-		l2Config []byte,
-		zkConfig []byte,
-		validators []types.Address,
-		blsSignatures [][]byte,
+		blockMeta []byte,
+		consensusData ConsensusData,
 	) (
+		nextBatchParams *tmproto.BatchParams, // set nil if no update
+		nextValidatorSet [][]byte,
 		err error,
 	)
+
+	VerifySignature(
+		tmKey []byte,
+		message []byte, // batch context hash
+		signature []byte,
+	) (
+		valid bool,
+		err error,
+	)
+}
+
+// Batcher is used to pack the blocks into a batch, and commit the batch if it is determined to be a batchPoint.
+type Batcher interface {
+	CalculateBatchSizeWithProposalBlock(
+		proposalBlockBytes []byte,
+		proposalTxs types.Txs,
+		get GetFromBatchStartFunc,
+	) (
+		batchSize int64,
+		err error,
+	)
+
+	SealBatch() (
+		batchHash []byte,
+		batchHeader []byte,
+		err error,
+	)
+
+	CommitBatch(
+		currentBlockBytes []byte,
+		currentTxs types.Txs,
+		blsDatas []BlsData,
+	) error
+
+	PackCurrentBlock(
+		currentBlockBytes []byte,
+		currentTxs types.Txs,
+	) error
+
+	AppendBlsData(height int64, batchHash []byte, data BlsData) error
+
+	BatchHash(batchHeader []byte) ([]byte, error)
+}
+type GetFromBatchStartFunc func() (
+	parentBatchHeader []byte,
+	blockMetas [][]byte,
+	transactions []types.Txs,
+	err error,
+)
+
+type ConsensusData struct {
+	ValidatorSet [][]byte
+	BatchHash    []byte
+}
+
+type BlsData struct {
+	Signer      []byte
+	Signature   []byte
+	VotingPower int64
 }
 
 func ConvertBytesToTxs(txs [][]byte) []types.Tx {
@@ -66,24 +125,20 @@ func ConvertTxsToBytes(txs []types.Tx) [][]byte {
 	return s
 }
 
-func GetValidators(commit *types.Commit) []types.Address {
-	var validators []types.Address
-	// fmt.Println("===========================")
+func GetBLSDatas(commit *types.Commit, validators *types.ValidatorSet) (blsDatas []BlsData, err error) {
 	for _, signature := range commit.Signatures {
-		// fmt.Println(len(signature.ValidatorAddress))
-		// TODO return err if len(signature.ValidatorAddress) == 0 {}
-		validators = append(validators, signature.ValidatorAddress)
+		if len(signature.BLSSignature) > 0 {
+			_, validator := validators.GetByAddress(signature.ValidatorAddress)
+			if validator == nil {
+				err = fmt.Errorf("no validator found by addresss: %x", signature.ValidatorAddress)
+				return
+			}
+			blsDatas = append(blsDatas, BlsData{
+				Signer:      validator.PubKey.Bytes(),
+				Signature:   signature.BLSSignature,
+				VotingPower: validator.VotingPower,
+			})
+		}
 	}
-	return validators
-}
-
-func GetBLSSignatures(commit *types.Commit) [][]byte {
-	var blsSignatures [][]byte
-	// fmt.Println("===========================")
-	for _, signature := range commit.Signatures {
-		// fmt.Println(len(signature.BLSSignature))
-		// TODO return err if len(signature.BLSSignature) == 0
-		blsSignatures = append(blsSignatures, signature.BLSSignature)
-	}
-	return blsSignatures
+	return
 }

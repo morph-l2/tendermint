@@ -111,7 +111,7 @@ func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
 
 	return NewNode(
 		config,
-		l2node.NewMockL2Node(1),
+		l2node.NewMockL2Node(1, ""),
 		privval.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile()),
 		&blsPrivKey,
 		nodeKey,
@@ -792,7 +792,7 @@ func NewNode(
 	// and replays any blocks as necessary to sync tendermint with the app.
 	consensusLogger := logger.With("module", "consensus")
 	if !stateSync {
-		if state.LastBlockHeight == 0 {
+		if state.LastBlockHeight == 0 { // ? may cause mismatch of (blocksync/reactor.go #78)
 			if err := doHandshake(stateStore, state, blockStore, genDoc, eventBus, proxyApp, consensusLogger); err != nil {
 				return nil, err
 			}
@@ -813,7 +813,7 @@ func NewNode(
 
 	logNodeStartupInfo(state, pubKey, logger, consensusLogger)
 
-	notifier := l2node.NewNotifier(l2Node)
+	notifier := l2node.NewNotifier(l2Node, consensusLogger)
 
 	// Make Evidence Reactor
 	evidenceReactor, evidencePool, err := createEvidenceReactor(config, dbProvider, stateDB, blockStore, logger)
@@ -954,47 +954,38 @@ func NewNode(
 	if err != nil {
 		panic(err)
 	}
-	// fmt.Println("============================================================")
-	// fmt.Println("RequestHeight")
-	// fmt.Println(csHeight)
-	// fmt.Println(h)
-	// fmt.Println("============================================================")
 
 	if h < csHeight {
 		for i := h + 1; i < csHeight; i++ {
 			block := blockStore.LoadBlock(i)
-			blockNext := blockStore.LoadBlock(i + 1)
-			// fmt.Println("============================================================")
-			// fmt.Println("Sync")
-			// fmt.Println(i)
-			// fmt.Println("DeliverBlock")
-			// fmt.Println(hex.EncodeToString(block.Data.L2Config))
-			// fmt.Println(hex.EncodeToString(block.Data.ZkConfig))
-			// fmt.Println("============================================================")
-			if err := node.ConsensusState().GetL2Node().DeliverBlock(
+			validators, err := stateStore.LoadValidators(h)
+			if err != nil {
+				panic(err)
+			}
+			if _, _, err := node.ConsensusState().GetL2Node().DeliverBlock(
 				l2node.ConvertTxsToBytes(block.Data.Txs),
-				block.Data.L2Config,
-				block.Data.ZkConfig,
-				l2node.GetValidators(blockNext.LastCommit),
-				l2node.GetBLSSignatures(blockNext.LastCommit),
+				block.Data.L2BlockMeta,
+				l2node.ConsensusData{
+					ValidatorSet: validators.GetPubKeyBytesList(),
+					BatchHash:    block.BatchHash,
+				},
 			); err != nil {
 				panic(err)
 			}
 		}
+
 		block := blockStore.LoadBlock(csHeight)
-		// fmt.Println("============================================================")
-		// fmt.Println("Sync")
-		// fmt.Println(csHeight)
-		// fmt.Println("DeliverBlock")
-		// fmt.Println(hex.EncodeToString(block.Data.L2Config))
-		// fmt.Println(hex.EncodeToString(block.Data.ZkConfig))
-		// fmt.Println("============================================================")
-		if err := node.ConsensusState().GetL2Node().DeliverBlock(
+		validators, err := stateStore.LoadValidators(csHeight)
+		if err != nil {
+			panic(err)
+		}
+		if _, _, err := node.ConsensusState().GetL2Node().DeliverBlock(
 			l2node.ConvertTxsToBytes(block.Data.Txs),
-			block.Data.L2Config,
-			block.Data.ZkConfig,
-			l2node.GetValidators(blockStore.LoadSeenCommit(csHeight)),
-			l2node.GetBLSSignatures(blockStore.LoadSeenCommit(csHeight)),
+			block.L2BlockMeta,
+			l2node.ConsensusData{
+				ValidatorSet: validators.GetPubKeyBytesList(),
+				BatchHash:    block.BatchHash,
+			},
 		); err != nil {
 			panic(err)
 		}
