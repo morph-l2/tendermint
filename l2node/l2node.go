@@ -2,6 +2,7 @@ package l2node
 
 import (
 	"fmt"
+
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/types"
 )
