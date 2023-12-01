@@ -156,21 +156,22 @@ func (l *MockL2Node) VerifySignature(
 	return true, nil
 }
 
-func (l *MockL2Node) CalculateBatchSizeWithProposalBlock(
+func (l *MockL2Node) CalculateCapWithProposalBlock(
 	proposalBlockBytes []byte,
 	proposalTxs types.Txs,
 	get GetFromBatchStartFunc,
 ) (
 	batchSize int64,
+	chunkNum int64,
 	err error,
 ) {
 	if len(proposalBlockBytes) < 8 {
-		return 0, errors.New("empty block bytes")
+		return 0, 0, errors.New("empty block bytes")
 	}
 	if len(l.encodingBatch) == 0 {
 		parentBatchHeader, blockMetas, transactions, err := get()
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		if len(parentBatchHeader) == 0 {
 			l.parentBatchHeader = l.genesisParentBatchHeader
@@ -189,7 +190,7 @@ func (l *MockL2Node) CalculateBatchSizeWithProposalBlock(
 	for _, tx := range proposalTxs {
 		l.currentBlockWithTxsBytes = append(l.currentBlockWithTxsBytes, tx...)
 	}
-	return int64(len(l.encodingBatch) + len(l.currentBlockWithTxsBytes)), err
+	return int64(len(l.encodingBatch) + len(l.currentBlockWithTxsBytes)), 0, err
 }
 
 func (l *MockL2Node) SealBatch() ([]byte, []byte, error) {

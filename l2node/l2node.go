@@ -61,12 +61,13 @@ type L2Node interface {
 
 // Batcher is used to pack the blocks into a batch, and commit the batch if it is determined to be a batchPoint.
 type Batcher interface {
-	CalculateBatchSizeWithProposalBlock(
+	CalculateCapWithProposalBlock(
 		proposalBlockBytes []byte,
 		proposalTxs types.Txs,
 		get GetFromBatchStartFunc,
 	) (
 		batchSize int64,
+		chunkNum int64,
 		err error,
 	)
 
