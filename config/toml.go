@@ -543,6 +543,12 @@ var testGenesisFmt = `{
 			"max_age_duration": "172800000000000",
 			"max_bytes": "1048576"
 		},
+		"batch": {
+		  "blocks_interval": "200",
+		  "max_bytes": "124928",
+		  "timeout": "600000000000",
+		  "max_chunks": "15"
+		},
 		"validator": {
 			"pub_key_types": [
 				"ed25519"
