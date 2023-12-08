@@ -1290,7 +1290,7 @@ func (cs *State) setTrustBatchData(blockHash tmbytes.HexBytes, batchHash, batchH
 
 func (cs *State) decideBatchPoint(l2BlockMeta tmbytes.HexBytes, txs types.Txs, blockHeight int64, blockTime time.Time) (batchHash []byte, batchHeader []byte) {
 	batchStartHeight, batchStartTime := cs.getBatchStart()
-	batchSize, err := cs.l2Node.CalculateBatchSizeWithProposalBlock(
+	batchSize, chunkNum, err := cs.l2Node.CalculateCapWithProposalBlock(
 		l2BlockMeta.Bytes(),
 		txs,
 		func() (parentBatchHeader []byte, blocksMeta [][]byte, transactions []types.Txs, err error) {
@@ -1320,10 +1320,12 @@ func (cs *State) decideBatchPoint(l2BlockMeta tmbytes.HexBytes, txs types.Txs, b
 		"batchSize", batchSize,
 		"blocksIntervalParam", cs.state.ConsensusParams.Batch.BlocksInterval,
 		"TimeoutParam", cs.state.ConsensusParams.Batch.Timeout,
-		"MaxBytesParam", cs.state.ConsensusParams.Batch.MaxBytes)
+		"MaxBytesParam", cs.state.ConsensusParams.Batch.MaxBytes,
+		"MaxChunksParam", cs.state.ConsensusParams.Batch.MaxChunks)
 	if (cs.state.ConsensusParams.Batch.BlocksInterval > 0 && blockHeight-batchStartHeight >= cs.state.ConsensusParams.Batch.BlocksInterval) ||
 		(cs.state.ConsensusParams.Batch.Timeout > 0 && blockTime.Sub(batchStartTime) >= cs.state.ConsensusParams.Batch.Timeout) ||
-		(cs.state.ConsensusParams.Batch.MaxBytes > 0 && batchSize >= cs.state.ConsensusParams.Batch.MaxBytes) {
+		(cs.state.ConsensusParams.Batch.MaxBytes > 0 && batchSize >= cs.state.ConsensusParams.Batch.MaxBytes) ||
+		(cs.state.ConsensusParams.Batch.MaxChunks > 0 && chunkNum > cs.state.ConsensusParams.Batch.MaxChunks) {
 		batchHash, batchHeader, err = cs.l2Node.SealBatch()
 		if err != nil {
 			panic(err)

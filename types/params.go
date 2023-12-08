@@ -45,6 +45,7 @@ type BatchParams struct {
 	BlocksInterval int64         `json:"blocks_interval"`
 	MaxBytes       int64         `json:"max_bytes"`
 	Timeout        time.Duration `json:"timeout"`
+	MaxChunks      int64         `json:"max_chunks"`
 }
 
 // BlockParams define limits on the block size and gas plus minimum time
@@ -87,6 +88,7 @@ func DefaultBatchParams() BatchParams {
 		BlocksInterval: 10,
 		MaxBytes:       8388608,
 		Timeout:        60 * time.Second,
+		MaxChunks:      15,
 	}
 }
 
@@ -197,8 +199,12 @@ func (params ConsensusParams) ValidateBasic() error {
 		return errors.New("timeout can't be negative")
 	}
 
-	if params.Batch.BlocksInterval <= 0 && params.Batch.MaxBytes <= 0 && params.Batch.Timeout <= 0 {
-		return errors.New("blocks_interval, max_bytes and timeout can't be all 0")
+	if params.Batch.MaxChunks < 0 {
+		return errors.New("max_chunks can't be negative")
+	}
+
+	if params.Batch.BlocksInterval <= 0 && params.Batch.MaxBytes <= 0 && params.Batch.Timeout <= 0 && params.Batch.MaxChunks <= 0 {
+		return errors.New("blocks_interval, max_bytes, timeout and max_chunks can't be all 0")
 	}
 
 	// Check if keyType is a known ABCIPubKeyType
@@ -253,6 +259,7 @@ func (params ConsensusParams) Update(params2 *tmproto.ConsensusParams) Consensus
 		res.Batch.BlocksInterval = params2.Batch.BlocksInterval
 		res.Batch.MaxBytes = params2.Batch.MaxBytes
 		res.Batch.Timeout = params2.Batch.Timeout
+		res.Batch.MaxChunks = params2.Batch.MaxChunks
 	}
 	if params2.Block != nil {
 		res.Block.MaxBytes = params2.Block.MaxBytes
@@ -281,6 +288,7 @@ func (params *ConsensusParams) ToProto() tmproto.ConsensusParams {
 			BlocksInterval: params.Batch.BlocksInterval,
 			MaxBytes:       params.Batch.MaxBytes,
 			Timeout:        params.Batch.Timeout,
+			MaxChunks:      params.Batch.MaxChunks,
 		},
 		Block: &tmproto.BlockParams{
 			MaxBytes: params.Block.MaxBytes,
@@ -306,6 +314,7 @@ func ConsensusParamsFromProto(pbParams tmproto.ConsensusParams) ConsensusParams 
 			BlocksInterval: pbParams.Batch.BlocksInterval,
 			MaxBytes:       pbParams.Batch.MaxBytes,
 			Timeout:        pbParams.Batch.Timeout,
+			MaxChunks:      pbParams.Batch.MaxChunks,
 		},
 		Block: BlockParams{
 			MaxBytes: pbParams.Block.MaxBytes,

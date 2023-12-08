@@ -22,6 +22,7 @@ message BatchParams {
   int64                    blocks_interval = 1;
   int64                    max_bytes       = 2;
   google.protobuf.Duration timeout         = 3 [(gogoproto.nullable) = false, (gogoproto.stdduration) = true];
+  int64                    max_chunks      = 4;
 }
 
 // BlockParams contains limits on the block size.
