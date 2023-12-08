@@ -792,10 +792,8 @@ func NewNode(
 	// and replays any blocks as necessary to sync tendermint with the app.
 	consensusLogger := logger.With("module", "consensus")
 	if !stateSync {
-		if state.LastBlockHeight == 0 { // ? may cause mismatch of (blocksync/reactor.go #78)
-			if err := doHandshake(stateStore, state, blockStore, genDoc, eventBus, proxyApp, consensusLogger); err != nil {
-				return nil, err
-			}
+		if err := doHandshake(stateStore, state, blockStore, genDoc, eventBus, proxyApp, consensusLogger); err != nil {
+			return nil, err
 		}
 
 		// Reload the state. It will have the Version.Consensus.App set by the
