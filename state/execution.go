@@ -381,7 +381,7 @@ func (blockExec *BlockExecutor) GetValidatorUpdates(
 			)
 		}
 	}
-	return
+	return validatorUpdates
 }
 
 // It returns the result of calling abci.Commit (the AppHash) and the height to retain (if any).

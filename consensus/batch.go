@@ -1,8 +1,9 @@
 package consensus
 
 import (
-	"github.com/tendermint/tendermint/crypto/tmhash"
 	"time"
+
+	"github.com/tendermint/tendermint/crypto/tmhash"
 
 	"github.com/tendermint/tendermint/types"
 )
