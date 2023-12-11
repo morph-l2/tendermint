@@ -13,6 +13,7 @@ import (
 	tmbytes "github.com/tendermint/tendermint/libs/bytes"
 
 	"github.com/cosmos/gogoproto/proto"
+
 	"github.com/tendermint/tendermint/blssignatures"
 	cfg "github.com/tendermint/tendermint/config"
 	cstypes "github.com/tendermint/tendermint/consensus/types"
@@ -1331,7 +1332,7 @@ func (cs *State) decideBatchPoint(l2BlockMeta tmbytes.HexBytes, txs types.Txs, b
 			panic(err)
 		}
 	}
-	return
+	return batchHash, batchHeader
 }
 
 func (cs *State) decideBatchPointWithProposedBlock(block *types.Block) (batchHash []byte, batchHeader []byte) {
@@ -1836,40 +1837,12 @@ func (cs *State) finalizeCommit(height int64) {
 	// Create a copy of the state for staging and an event cache for txs.
 	stateCopy := cs.state.Copy()
 
-	blsDatas, err := l2node.GetBLSDatas(seenCommit, stateCopy.Validators)
-	if err != nil {
-		panic(err)
-	}
-	valset := stateCopy.Validators.GetPubKeyBytesList()
-	nextValidators := stateCopy.NextValidators.GetPubKeyBytesList()
-	nextBatchParams, nextValidatorSet, err := cs.l2Node.DeliverBlock(
-		l2node.ConvertTxsToBytes(block.Data.Txs),
-		block.L2BlockMeta,
-		l2node.ConsensusData{
-			ValidatorSet: valset,
-			BatchHash:    block.BatchHash,
-		},
-	)
-	if err != nil {
-		logger.Error("failed to deliver block", "err", err, "height", block.Height)
-		return
-	}
-
-	if len(block.BatchHash) > 0 { // this is a batchPoint
-		if err = cs.l2Node.CommitBatch(block.L2BlockMeta, block.Txs, blsDatas); err != nil {
-			logger.Error("failed to commit batch", "err", err, "height", block.Height)
-			return
-		}
-	} else {
-		if err = cs.l2Node.PackCurrentBlock(block.L2BlockMeta, block.Txs); err != nil {
-			logger.Error("failed to pack current block", "err", err, "height", block.Height)
-			return
-		}
-	}
-
 	// Execute and commit the block, update and save the state.
 	// NOTE The block.AppHash wont reflect these txs until the next block.
-	var retainHeight int64
+	var (
+		retainHeight int64
+		err          error
+	)
 	stateCopy, retainHeight, err = cs.blockExec.ApplyBlock(
 		stateCopy,
 		types.BlockID{
@@ -1878,8 +1851,7 @@ func (cs *State) finalizeCommit(height int64) {
 			PartSetHeader: blockParts.Header(),
 		},
 		block,
-		cs.blockExec.GetConsensusParamsUpdate(nextBatchParams, nil, nil, nil, nil),
-		cs.blockExec.GetValidatorUpdates(nextValidatorSet, nextValidators),
+		seenCommit,
 	)
 	if err != nil {
 		logger.Error("failed to apply block", "err", err)

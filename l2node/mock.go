@@ -142,7 +142,7 @@ func (l *MockL2Node) DeliverBlock(
 		}()
 	}
 
-	return
+	return nextBatchParams, nextValidatorSet, err
 }
 
 func (l *MockL2Node) VerifySignature(

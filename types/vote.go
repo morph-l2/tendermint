@@ -201,12 +201,12 @@ func (vote *Vote) ValidateBasic() error {
 	}
 
 	if len(vote.BlockID.BatchHash) == 0 && len(vote.BLSSignature) > 0 {
-		return errors.New("blsSignature cannot exist when batchHash is emtpy")
+		return errors.New("blsSignature cannot exist when batchHash is empty")
 	}
 
 	// only check it if it is `precommit` vote; no need to sign a bls signature during `prevote`
 	if vote.Type == tmproto.PrecommitType && len(vote.BlockID.BatchHash) > 0 && len(vote.BLSSignature) == 0 {
-		return errors.New("blsSignature must exist when batchHash is not emtpy")
+		return errors.New("blsSignature must exist when batchHash is not empty")
 	}
 
 	return nil

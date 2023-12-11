@@ -418,13 +418,15 @@ FOR_LOOP:
 							return errors.New("should not have bls signatures when batchHash is empty")
 						}
 						for _, blsData := range blsDatas {
-							valid, err := bcR.l2Node.VerifySignature(blsData.Signer, first.BatchHash, blsData.Signature)
-							if err != nil {
-								return err
-							}
-							if valid {
-								validVotingPowers += blsData.VotingPower
-							}
+							// todo currently can not ensure the l2node has the corresponding bls public key of the signer
+							//valid, err := bcR.l2Node.VerifySignature(blsData.Signer, first.BatchHash, blsData.Signature)
+							//if err != nil {
+							//	return err
+							//}
+							//if valid {
+							//	validVotingPowers += blsData.VotingPower
+							//}
+							validVotingPowers += blsData.VotingPower
 						}
 						quorum := state.Validators.TotalVotingPower()*2/3 + 1
 						if validVotingPowers < quorum {
@@ -461,28 +463,13 @@ FOR_LOOP:
 			// TODO: batch saves so we dont persist to disk every block
 			bcR.store.SaveBlock(first, firstParts, second.LastCommit)
 
-			valPkBytesList := state.Validators.GetPubKeyBytesList()
-			nextValPkBytesList := state.NextValidators.GetPubKeyBytesList()
-			nextBatchParams, nextValidatorSet, err := bcR.l2Node.DeliverBlock(
-				l2node.ConvertTxsToBytes(first.Data.Txs),
-				first.Data.L2BlockMeta,
-				l2node.ConsensusData{
-					ValidatorSet: valPkBytesList,
-					BatchHash:    first.BatchHash,
-				},
-			)
-			if err != nil {
-				panic(err)
-			}
-
 			// TODO: same thing for app - but we would need a way to
 			// get the hash without persisting the state
 			state, _, err = bcR.blockExec.ApplyBlock(
 				state,
 				firstID,
 				first,
-				bcR.blockExec.GetConsensusParamsUpdate(nextBatchParams, nil, nil, nil, nil),
-				bcR.blockExec.GetValidatorUpdates(nextValidatorSet, nextValPkBytesList),
+				nil,
 			)
 			if err != nil {
 				// TODO This is bad, are we zombie?

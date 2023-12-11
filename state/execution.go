@@ -32,6 +32,9 @@ type BlockExecutor struct {
 	// execute the app against this
 	proxyApp proxy.AppConnConsensus
 
+	// execute l2 tx against this
+	l2Node l2node.L2Node
+
 	// events
 	eventBus types.BlockEventPublisher
 
@@ -58,6 +61,7 @@ func NewBlockExecutor(
 	stateStore Store,
 	logger log.Logger,
 	proxyApp proxy.AppConnConsensus,
+	l2Node l2node.L2Node,
 	notifier *l2node.Notifier,
 	evpool EvidencePool,
 	options ...BlockExecutorOption,
@@ -65,6 +69,7 @@ func NewBlockExecutor(
 	res := &BlockExecutor{
 		store:    stateStore,
 		proxyApp: proxyApp,
+		l2Node:   l2Node,
 		eventBus: types.NopEventBus{},
 		notifier: notifier,
 		evpool:   evpool,
@@ -218,14 +223,54 @@ func (blockExec *BlockExecutor) ApplyBlock(
 	state State,
 	blockID types.BlockID,
 	block *types.Block,
-	consensusParamUpdates *tmproto.ConsensusParams,
-	validatorUpdates []*types.Validator,
+	commit *types.Commit,
 ) (
 	State, int64, error,
 ) {
 	err := validateBlock(state, block)
 	if err != nil {
 		return state, 0, ErrInvalidBlock(err)
+	}
+
+	// deliver blocks at execution layer
+	var consensusParamUpdates *tmproto.ConsensusParams
+	var validatorUpdates []*types.Validator
+	if blockExec.l2Node != nil {
+		nextValidators := state.NextValidators.GetPubKeyBytesList()
+		nextBatchParams, nextValidatorSet, err := blockExec.l2Node.DeliverBlock(
+			l2node.ConvertTxsToBytes(block.Data.Txs),
+			block.L2BlockMeta,
+			l2node.ConsensusData{
+				ValidatorSet: state.Validators.GetPubKeyBytesList(),
+				BatchHash:    block.BatchHash,
+			},
+		)
+		if err != nil {
+			blockExec.logger.Error("failed to deliver block", "err", err, "height", block.Height)
+			return state, 0, err
+		}
+
+		// batch operation
+		if commit != nil {
+			blsDatas, err := l2node.GetBLSDatas(commit, state.Validators)
+			if err != nil {
+				panic(err)
+			}
+			if len(block.BatchHash) > 0 { // this is a batchPoint
+				if err = blockExec.l2Node.CommitBatch(block.L2BlockMeta, block.Txs, blsDatas); err != nil {
+					blockExec.logger.Error("failed to commit batch", "err", err, "height", block.Height)
+					return state, 0, err
+				}
+			} else {
+				if err = blockExec.l2Node.PackCurrentBlock(block.L2BlockMeta, block.Txs); err != nil {
+					blockExec.logger.Error("failed to pack current block", "err", err, "height", block.Height)
+					return state, 0, err
+				}
+			}
+		}
+
+		consensusParamUpdates = blockExec.GetConsensusParamsUpdate(nextBatchParams, nil, nil, nil, nil)
+		validatorUpdates = blockExec.GetValidatorUpdates(nextValidatorSet, nextValidators)
 	}
 
 	if len(validatorUpdates) > 0 {
@@ -336,7 +381,7 @@ func (blockExec *BlockExecutor) GetValidatorUpdates(
 			)
 		}
 	}
-	return
+	return validatorUpdates
 }
 
 // It returns the result of calling abci.Commit (the AppHash) and the height to retain (if any).

@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	tmbytes "github.com/tendermint/tendermint/libs/bytes"
 	"os"
 	"time"
+
+	tmbytes "github.com/tendermint/tendermint/libs/bytes"
 
 	"github.com/cosmos/gogoproto/proto"
 

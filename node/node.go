@@ -344,12 +344,13 @@ func doHandshake(
 	genDoc *types.GenesisDoc,
 	eventBus types.BlockEventPublisher,
 	proxyApp proxy.AppConns,
+	l2Node l2node.L2Node,
 	consensusLogger log.Logger,
 ) error {
 	handshaker := cs.NewHandshaker(stateStore, state, blockStore, genDoc)
 	handshaker.SetLogger(consensusLogger)
 	handshaker.SetEventBus(eventBus)
-	if err := handshaker.Handshake(proxyApp); err != nil {
+	if err := handshaker.Handshake(proxyApp, l2Node); err != nil {
 		return fmt.Errorf("error during handshake: %v", err)
 	}
 	return nil
@@ -792,7 +793,7 @@ func NewNode(
 	// and replays any blocks as necessary to sync tendermint with the app.
 	consensusLogger := logger.With("module", "consensus")
 	if !stateSync {
-		if err := doHandshake(stateStore, state, blockStore, genDoc, eventBus, proxyApp, consensusLogger); err != nil {
+		if err := doHandshake(stateStore, state, blockStore, genDoc, eventBus, proxyApp, l2Node, consensusLogger); err != nil {
 			return nil, err
 		}
 
@@ -824,6 +825,7 @@ func NewNode(
 		stateStore,
 		logger.With("module", "state"),
 		proxyApp.Consensus(),
+		l2Node,
 		notifier,
 		evidencePool,
 		sm.BlockExecutorWithMetrics(smMetrics),
@@ -946,49 +948,6 @@ func NewNode(
 	for _, option := range options {
 		option(node)
 	}
-
-	csHeight := node.ConsensusState().Height - 1
-	h, err := node.ConsensusState().GetL2Node().RequestHeight(csHeight)
-	if err != nil {
-		panic(err)
-	}
-
-	if h < csHeight {
-		for i := h + 1; i < csHeight; i++ {
-			block := blockStore.LoadBlock(i)
-			validators, err := stateStore.LoadValidators(h)
-			if err != nil {
-				panic(err)
-			}
-			if _, _, err := node.ConsensusState().GetL2Node().DeliverBlock(
-				l2node.ConvertTxsToBytes(block.Data.Txs),
-				block.Data.L2BlockMeta,
-				l2node.ConsensusData{
-					ValidatorSet: validators.GetPubKeyBytesList(),
-					BatchHash:    block.BatchHash,
-				},
-			); err != nil {
-				panic(err)
-			}
-		}
-
-		block := blockStore.LoadBlock(csHeight)
-		validators, err := stateStore.LoadValidators(csHeight)
-		if err != nil {
-			panic(err)
-		}
-		if _, _, err := node.ConsensusState().GetL2Node().DeliverBlock(
-			l2node.ConvertTxsToBytes(block.Data.Txs),
-			block.L2BlockMeta,
-			l2node.ConsensusData{
-				ValidatorSet: validators.GetPubKeyBytesList(),
-				BatchHash:    block.BatchHash,
-			},
-		); err != nil {
-			panic(err)
-		}
-	}
-
 	return node, nil
 }
 
