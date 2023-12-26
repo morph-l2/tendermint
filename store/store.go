@@ -342,6 +342,100 @@ func (bs *BlockStore) PruneBlocks(height int64) (uint64, error) {
 	return pruned, nil
 }
 
+// PruneBlocksSince removes block since start height to current. It returns the number of blocks pruned.
+func (bs *BlockStore) PruneBlocksSince(height int64) (uint64, error) {
+	current := bs.height
+	if height > current {
+		return 0, fmt.Errorf("height must be smaller than current height")
+	}
+
+	pruned := uint64(0)
+	batch := bs.db.NewBatch()
+	defer batch.Close()
+	flush := func(batch dbm.Batch, height int64) error {
+		// We can't trust batches to be atomic, so update base first to make sure noone
+		// tries to access missing blocks.
+		bs.mtx.Lock()
+		bs.height = height
+		bs.mtx.Unlock()
+		bs.saveState()
+
+		err := batch.WriteSync()
+		if err != nil {
+			return fmt.Errorf("failed to prune block to height %d: %w", height, err)
+		}
+		batch.Close()
+		return nil
+	}
+
+	for h := current; h >= height; h-- {
+		meta := LoadBlockMeta(bs.db, h)
+		if meta == nil { // assume already deleted
+			continue
+		}
+		if err := batch.Delete(calcBlockMetaKey(h)); err != nil {
+			return 0, err
+		}
+		if err := batch.Delete(calcBlockHashKey(meta.BlockID.Hash)); err != nil {
+			return 0, err
+		}
+		if err := batch.Delete(calcBlockCommitKey(h)); err != nil {
+			return 0, err
+		}
+		if err := batch.Delete(calcSeenCommitKey(h)); err != nil {
+			return 0, err
+		}
+		for p := 0; p < int(meta.BlockID.PartSetHeader.Total); p++ {
+			if err := batch.Delete(calcBlockPartKey(h, p)); err != nil {
+				return 0, err
+			}
+		}
+		pruned++
+
+		// flush every 1000 blocks to avoid batches becoming too large
+		if pruned%1000 == 0 && pruned > 0 {
+			err := flush(batch, h)
+			if err != nil {
+				return 0, err
+			}
+			batch = bs.db.NewBatch()
+			defer batch.Close()
+		}
+	}
+
+	err := flush(batch, height-1) // save BlockStoreState to latest remained height what is `height - 1`
+	if err != nil {
+		return 0, err
+	}
+
+	return pruned, nil
+}
+
+func LoadBlockMeta(db dbm.DB, height int64) *types.BlockMeta {
+	var pbbm = new(tmproto.BlockMeta)
+	bz, err := db.Get(calcBlockMetaKey(height))
+
+	if err != nil {
+		panic(err)
+	}
+
+	if len(bz) == 0 {
+		return nil
+	}
+
+	err = proto.Unmarshal(bz, pbbm)
+	if err != nil {
+		panic(fmt.Errorf("unmarshal to tmproto.BlockMeta: %w", err))
+	}
+
+	blockMeta, err := types.BlockMetaFromProto(pbbm)
+	if err != nil {
+		panic(fmt.Errorf("error from proto blockMeta: %w", err))
+	}
+
+	return blockMeta
+}
+
 // SaveBlock persists the given block, blockParts, and seenCommit to the underlying db.
 // blockParts: Must be parts of the block
 // seenCommit: The +2/3 precommits that were seen which committed at height.
