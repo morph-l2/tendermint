@@ -73,7 +73,7 @@ func (cs *State) getBatchStart() (int64, time.Time) {
 	}
 
 	if cs.Height == cs.state.InitialHeight { // use genesis block as the first batch point
-		return 0, cs.StartTime
+		return 0, cs.state.LastBlockTime
 	}
 
 	var blocksByDesc []*types.Block // stores the blocks from last batch point block(which is not included) to now

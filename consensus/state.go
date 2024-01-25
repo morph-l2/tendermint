@@ -1323,6 +1323,9 @@ func (cs *State) decideBatchPoint(l2BlockMeta tmbytes.HexBytes, txs types.Txs, b
 		"TimeoutParam", cs.state.ConsensusParams.Batch.Timeout,
 		"MaxBytesParam", cs.state.ConsensusParams.Batch.MaxBytes,
 		"MaxChunksParam", cs.state.ConsensusParams.Batch.MaxChunks)
+	if blockHeight == 1 {
+		return
+	}
 	if sizeExceeded ||
 		(cs.state.ConsensusParams.Batch.BlocksInterval > 0 && blockHeight-batchStartHeight >= cs.state.ConsensusParams.Batch.BlocksInterval) ||
 		(cs.state.ConsensusParams.Batch.Timeout > 0 && blockTime.Sub(batchStartTime) >= cs.state.ConsensusParams.Batch.Timeout) ||
