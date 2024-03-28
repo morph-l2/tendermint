@@ -2231,7 +2231,7 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID, replay bool) (added bo
 		// check the bls signature before adding it to LastCommit
 		if len(vote.BlockID.BatchHash) > 0 {
 			if len(vote.BLSSignature) == 0 {
-				return
+				return false, errors.New("can not find bls signature while the batchHash is not empty")
 			}
 			pubKey := cs.Validators.Validators[vote.ValidatorIndex].PubKey.Bytes()
 			valid, err := cs.l2Node.VerifySignature(pubKey, vote.BlockID.BatchHash, vote.BLSSignature)
