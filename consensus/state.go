@@ -1291,7 +1291,7 @@ func (cs *State) setTrustBatchData(blockHash tmbytes.HexBytes, batchHash, batchH
 
 func (cs *State) decideBatchPoint(l2BlockMeta tmbytes.HexBytes, txs types.Txs, blockHeight int64, blockTime time.Time) (batchHash []byte, batchHeader []byte) {
 	batchStartHeight, batchStartTime := cs.getBatchStart()
-	batchSize, chunkNum, err := cs.l2Node.CalculateCapWithProposalBlock(
+	sizeExceeded, chunkNum, err := cs.l2Node.CalculateCapWithProposalBlock(
 		l2BlockMeta.Bytes(),
 		txs,
 		func() (parentBatchHeader []byte, blocksMeta [][]byte, transactions []types.Txs, err error) {
@@ -1318,7 +1318,7 @@ func (cs *State) decideBatchPoint(l2BlockMeta tmbytes.HexBytes, txs types.Txs, b
 		"batchStartHeight", batchStartHeight,
 		"currentBlockTime", blockTime.String(),
 		"batchStartTime", batchStartTime.String(),
-		"batchSize", batchSize,
+		"sizeExceeded", sizeExceeded,
 		"blocksIntervalParam", cs.state.ConsensusParams.Batch.BlocksInterval,
 		"TimeoutParam", cs.state.ConsensusParams.Batch.Timeout,
 		"MaxBytesParam", cs.state.ConsensusParams.Batch.MaxBytes,
@@ -1326,9 +1326,9 @@ func (cs *State) decideBatchPoint(l2BlockMeta tmbytes.HexBytes, txs types.Txs, b
 	if blockHeight == 1 {
 		return
 	}
-	if (cs.state.ConsensusParams.Batch.BlocksInterval > 0 && blockHeight-batchStartHeight >= cs.state.ConsensusParams.Batch.BlocksInterval) ||
+	if sizeExceeded ||
+		(cs.state.ConsensusParams.Batch.BlocksInterval > 0 && blockHeight-batchStartHeight >= cs.state.ConsensusParams.Batch.BlocksInterval) ||
 		(cs.state.ConsensusParams.Batch.Timeout > 0 && blockTime.Sub(batchStartTime) >= cs.state.ConsensusParams.Batch.Timeout) ||
-		(cs.state.ConsensusParams.Batch.MaxBytes > 0 && batchSize >= cs.state.ConsensusParams.Batch.MaxBytes) ||
 		(cs.state.ConsensusParams.Batch.MaxChunks > 0 && chunkNum > cs.state.ConsensusParams.Batch.MaxChunks) {
 		batchHash, batchHeader, err = cs.l2Node.SealBatch()
 		if err != nil {
@@ -2231,7 +2231,7 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID, replay bool) (added bo
 		// check the bls signature before adding it to LastCommit
 		if len(vote.BlockID.BatchHash) > 0 {
 			if len(vote.BLSSignature) == 0 {
-				return
+				return false, errors.New("can not find bls signature while the batchHash is not empty")
 			}
 			pubKey := cs.Validators.Validators[vote.ValidatorIndex].PubKey.Bytes()
 			valid, err := cs.l2Node.VerifySignature(pubKey, vote.BlockID.BatchHash, vote.BLSSignature)

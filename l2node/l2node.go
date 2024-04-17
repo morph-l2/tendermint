@@ -67,7 +67,7 @@ type Batcher interface {
 		proposalTxs types.Txs,
 		get GetFromBatchStartFunc,
 	) (
-		batchSize int64,
+		sizeExceeded bool,
 		chunkNum int64,
 		err error,
 	)
