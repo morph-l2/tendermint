@@ -465,12 +465,8 @@ func (h *Handshaker) replayBlocks(
 	for i := firstBlock; i <= finalBlock; i++ {
 		h.logger.Info("Applying block", "height", i)
 		block := h.store.LoadBlock(i)
-		// Extra check to ensure the app was not changed in a way it shouldn't have.
-		if len(appHash) > 0 {
-			assertAppHashEqualsOneFromBlock(appHash, block)
-		}
 
-		appHash, err = sm.ExecCommitBlock(proxyApp.Consensus(), block, h.logger, h.stateStore, h.genDoc.InitialHeight)
+		_, _, err = sm.ExecBlockOnL2Node(h.logger, l2node, block, nil, nil)
 		if err != nil {
 			return nil, err
 		}

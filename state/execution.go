@@ -235,38 +235,15 @@ func (blockExec *BlockExecutor) ApplyBlock(
 	// deliver blocks at execution layer
 	var consensusParamUpdates *tmproto.ConsensusParams
 	var validatorUpdates []*types.Validator
-	if blockExec.l2Node != nil {
-		nextValidators := state.NextValidators.GetPubKeyBytesList()
-		nextBatchParams, nextValidatorSet, err := blockExec.l2Node.DeliverBlock(
-			l2node.ConvertTxsToBytes(block.Data.Txs),
-			block.L2BlockMeta,
-			l2node.ConsensusData{
-				ValidatorSet: state.Validators.GetPubKeyBytesList(),
-				BatchHash:    block.BatchHash,
-			},
-		)
-		if err != nil {
-			blockExec.logger.Error("failed to deliver block", "err", err, "height", block.Height)
-			return state, 0, err
-		}
 
-		// batch operation
-		if commit != nil {
-			blsDatas, err := l2node.GetBLSDatas(commit, state.Validators)
-			if err != nil {
-				panic(err)
-			}
-			if len(block.BatchHash) > 0 { // this is a batchPoint
-				if err = blockExec.l2Node.CommitBatch(block.L2BlockMeta, block.Txs, blsDatas); err != nil {
-					blockExec.logger.Error("failed to commit batch", "err", err, "height", block.Height)
-					return state, 0, err
-				}
-			} else {
-				if err = blockExec.l2Node.PackCurrentBlock(block.L2BlockMeta, block.Txs); err != nil {
-					blockExec.logger.Error("failed to pack current block", "err", err, "height", block.Height)
-					return state, 0, err
-				}
-			}
+	nextValidators := state.NextValidators.GetPubKeyBytesList()
+	if blockExec.l2Node != nil {
+		startTime := time.Now().UnixNano()
+		nextBatchParams, nextValidatorSet, err := ExecBlockOnL2Node(blockExec.logger, blockExec.l2Node, block, state.Validators, commit)
+		endTime := time.Now().UnixNano()
+		blockExec.metrics.BlockProcessingTime.Observe(float64(endTime-startTime) / 1000000)
+		if err != nil {
+			return state, 0, err
 		}
 
 		consensusParamUpdates = blockExec.GetConsensusParamsUpdate(nextBatchParams, nil, nil, nil, nil)
@@ -411,6 +388,47 @@ func (blockExec *BlockExecutor) Commit(
 
 //---------------------------------------------------------
 // Helper functions for executing blocks and updating state
+
+func ExecBlockOnL2Node(logger log.Logger, l2Node l2node.L2Node, block *types.Block, validatorSet *types.ValidatorSet, commit *types.Commit) (*tmproto.BatchParams, [][]byte, error) {
+	var validators [][]byte
+	if validatorSet != nil {
+		validators = validatorSet.GetPubKeyBytesList()
+	}
+
+	nextBatchParams, nextValidatorSet, err := l2Node.DeliverBlock(
+		l2node.ConvertTxsToBytes(block.Data.Txs),
+		block.L2BlockMeta,
+		l2node.ConsensusData{
+			ValidatorSet: validators,
+			BatchHash:    block.BatchHash,
+		},
+	)
+	if err != nil {
+		logger.Error("failed to deliver block", "err", err, "height", block.Height)
+		return nil, nil, err
+	}
+
+	// batch operation
+	if commit != nil {
+		blsDatas, err := l2node.GetBLSDatas(commit, validatorSet)
+		if err != nil {
+			panic(err)
+		}
+		if len(block.BatchHash) > 0 { // this is a batchPoint
+			if err = l2Node.CommitBatch(block.L2BlockMeta, block.Txs, blsDatas); err != nil {
+				logger.Error("failed to commit batch", "err", err, "height", block.Height)
+				return nil, nil, err
+			}
+		} else {
+			if err = l2Node.PackCurrentBlock(block.L2BlockMeta, block.Txs); err != nil {
+				logger.Error("failed to pack current block", "err", err, "height", block.Height)
+				return nil, nil, err
+			}
+		}
+	}
+
+	return nextBatchParams, nextValidatorSet, nil
+}
 
 // Executes block's transactions on proxyAppConn.
 // Returns a list of transaction results and updates to the validator set
