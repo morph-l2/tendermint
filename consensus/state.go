@@ -679,13 +679,15 @@ func (cs *State) updateToState(state sm.State) {
 	cs.updateHeight(height)
 	cs.updateRoundStep(0, cstypes.RoundStepNewHeight)
 
-	if state.LastBlockTime.IsZero() {
+	if cs.CommitTime.IsZero() {
 		// "Now" makes it easier to sync up dev nodes.
 		// We add timeoutCommit to allow transactions
 		// to be gathered for the first block.
+		// And alternative solution that relies on clocks:
+		// cs.StartTime = state.LastBlockTime.Add(timeoutCommit)
 		cs.StartTime = cs.config.Commit(tmtime.Now())
 	} else {
-		cs.StartTime = cs.config.Commit(state.LastBlockTime)
+		cs.StartTime = cs.config.Commit(cs.CommitTime)
 	}
 
 	cs.Validators = validators
