@@ -679,13 +679,21 @@ func (cs *State) updateToState(state sm.State) {
 	cs.updateHeight(height)
 	cs.updateRoundStep(0, cstypes.RoundStepNewHeight)
 
-	if state.LastBlockTime.IsZero() {
+	if cs.StartTime.IsZero() {
+		cs.LastStartTime = tmtime.Now()
+	} else {
+		cs.LastStartTime = cs.StartTime
+	}
+
+	if cs.CommitTime.IsZero() {
 		// "Now" makes it easier to sync up dev nodes.
 		// We add timeoutCommit to allow transactions
 		// to be gathered for the first block.
+		// And alternative solution that relies on clocks:
+		// cs.StartTime = state.LastStartTime.Add(timeoutCommit)
 		cs.StartTime = cs.config.Commit(tmtime.Now())
 	} else {
-		cs.StartTime = cs.config.Commit(state.LastBlockTime)
+		cs.StartTime = cs.config.Commit(cs.CommitTime)
 	}
 
 	cs.Validators = validators
@@ -2204,6 +2212,29 @@ func (cs *State) tryAddVote(vote *types.Vote, peerID p2p.ID, replay bool) (bool,
 	return added, nil
 }
 
+// rescheduleStartTime shorten the sleep duration when all the precommits are received.
+// we still have to promise it has at least cs.config.TimeoutCommit sleep time from last start time
+func (cs *State) rescheduleStartTime() {
+	expectedStartTime := cs.LastStartTime.Add(cs.config.TimeoutCommit)
+
+	// cs.StartTime is set to (commitTime + cs.config.TimeoutCommit),
+	// so it is highly unlikely to happen, but just in case
+	if !cs.StartTime.After(expectedStartTime) {
+		return
+	}
+
+	before := cs.StartTime
+	if expectedStartTime.Before(tmtime.Now()) {
+		cs.StartTime = tmtime.Now()
+		// use scheduleTimeout to replace the previous time ticker
+		cs.scheduleTimeout(time.Duration(0), cs.Height, 0, cstypes.RoundStepNewHeight)
+	} else {
+		cs.StartTime = expectedStartTime
+		cs.scheduleTimeout(cs.StartTime.Sub(tmtime.Now()), cs.Height, 0, cstypes.RoundStepNewHeight)
+	}
+	cs.Logger.Info("rescheduled the startTime", "before", before, "after", cs.StartTime, "shortenDur", before.Sub(cs.StartTime))
+}
+
 func (cs *State) addVote(vote *types.Vote, peerID p2p.ID, replay bool) (added bool, err error) {
 	cs.Logger.Debug(
 		"adding vote",
@@ -2269,11 +2300,16 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID, replay bool) (added bo
 
 		cs.evsw.FireEvent(types.EventVote, vote)
 
-		// if we can skip timeoutCommit and have all the votes now,
-		if cs.config.SkipTimeoutCommit && cs.LastCommit.HasAll() {
+		// if we have all the votes now
+		if cs.LastCommit.HasAll() {
 			// go straight to new round (skip timeout commit)
 			// cs.scheduleTimeout(time.Duration(0), cs.Height, 0, cstypes.RoundStepNewHeight)
-			cs.enterNewRound(cs.Height, 0)
+			if cs.config.SkipTimeoutCommit {
+				cs.enterNewRound(cs.Height, 0)
+			} else {
+				cs.Logger.Info("all the precommits are received, trying to shorten the start time", "height", vote.Height)
+				cs.rescheduleStartTime()
+			}
 		}
 
 		return
@@ -2422,8 +2458,13 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID, replay bool) (added bo
 
 			if len(blockID.Hash) != 0 {
 				cs.enterCommit(height, vote.Round)
-				if cs.config.SkipTimeoutCommit && precommits.HasAll() {
-					cs.enterNewRound(cs.Height, 0)
+				if precommits.HasAll() {
+					if cs.config.SkipTimeoutCommit {
+						cs.enterNewRound(cs.Height, 0)
+					} else {
+						cs.Logger.Info("all the precommits are received, trying to shorten the start time", "height", vote.Height)
+						cs.rescheduleStartTime()
+					}
 				}
 			} else {
 				cs.enterPrecommitWait(height, vote.Round)
