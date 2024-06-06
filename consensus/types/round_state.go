@@ -100,6 +100,9 @@ type RoundState struct {
 	LastCommit                *types.VoteSet      `json:"last_commit"`  // Last precommits at Height-1
 	LastValidators            *types.ValidatorSet `json:"last_validators"`
 	TriggeredTimeoutPrecommit bool                `json:"triggered_timeout_precommit"`
+
+	// we need to check the waiting period from LastStartTime
+	LastStartTime time.Time `json:"last_start_time"`
 }
 
 // Compressed version of the RoundState for use in RPC
@@ -200,6 +203,7 @@ func (rs *RoundState) StringIndented(indent string) string {
 %s  Votes:         %v
 %s  LastCommit:    %v
 %s  LastValidators:%v
+%s  LastStartTime: %v
 %s}`,
 		indent, rs.Height, rs.Round, rs.Step,
 		indent, rs.StartTime,
@@ -214,6 +218,7 @@ func (rs *RoundState) StringIndented(indent string) string {
 		indent, rs.Votes.StringIndented(indent+"  "),
 		indent, rs.LastCommit.StringShort(),
 		indent, rs.LastValidators.StringIndented(indent+"  "),
+		indent, rs.LastStartTime,
 		indent)
 }
 
