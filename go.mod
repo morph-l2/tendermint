@@ -27,7 +27,7 @@ require (
 	github.com/lib/pq v1.10.7
 	github.com/libp2p/go-buffer-pool v0.1.0
 	github.com/minio/highwayhash v1.0.2
-	github.com/morph-l2/go-ethereum v1.10.14-0.20240815034445-40f5783793bb
+	github.com/morph-l2/go-ethereum v0.5.0
 	github.com/ory/dockertest v3.3.5+incompatible
 	github.com/pkg/errors v0.9.1
 	github.com/pointlander/peg v1.0.1
