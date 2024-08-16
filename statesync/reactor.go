@@ -128,8 +128,7 @@ func (r *Reactor) Receive(chID byte, src p2p.Peer, msgBytes []byte) {
 				return
 			}
 			for _, snapshot := range snapshots {
-				r.Logger.Debug("Advertising snapshot", "height", snapshot.Height,
-					"format", snapshot.Format, "peer", src.ID())
+				r.Logger.Debug("Advertising snapshot", "height", snapshot.Height, "format", snapshot.Format, "peer", src.ID())
 				src.Send(chID, mustEncodeMsg(&ssproto.SnapshotsResponse{
 					Height:   snapshot.Height,
 					Format:   snapshot.Format,
@@ -156,8 +155,7 @@ func (r *Reactor) Receive(chID byte, src p2p.Peer, msgBytes []byte) {
 			})
 			// TODO: We may want to consider punishing the peer for certain errors
 			if err != nil {
-				r.Logger.Error("Failed to add snapshot", "height", msg.Height, "format", msg.Format,
-					"peer", src.ID(), "err", err)
+				r.Logger.Error("Failed to add snapshot", "height", msg.Height, "format", msg.Format, "peer", src.ID(), "err", err)
 				return
 			}
 
@@ -168,20 +166,17 @@ func (r *Reactor) Receive(chID byte, src p2p.Peer, msgBytes []byte) {
 	case ChunkChannel:
 		switch msg := msg.(type) {
 		case *ssproto.ChunkRequest:
-			r.Logger.Debug("Received chunk request", "height", msg.Height, "format", msg.Format,
-				"chunk", msg.Index, "peer", src.ID())
+			r.Logger.Debug("Received chunk request", "height", msg.Height, "format", msg.Format, "chunk", msg.Index, "peer", src.ID())
 			resp, err := r.conn.LoadSnapshotChunkSync(abci.RequestLoadSnapshotChunk{
 				Height: msg.Height,
 				Format: msg.Format,
 				Chunk:  msg.Index,
 			})
 			if err != nil {
-				r.Logger.Error("Failed to load chunk", "height", msg.Height, "format", msg.Format,
-					"chunk", msg.Index, "err", err)
+				r.Logger.Error("Failed to load chunk", "height", msg.Height, "format", msg.Format, "chunk", msg.Index, "err", err)
 				return
 			}
-			r.Logger.Debug("Sending chunk", "height", msg.Height, "format", msg.Format,
-				"chunk", msg.Index, "peer", src.ID())
+			r.Logger.Debug("Sending chunk", "height", msg.Height, "format", msg.Format, "chunk", msg.Index, "peer", src.ID())
 			src.Send(ChunkChannel, mustEncodeMsg(&ssproto.ChunkResponse{
 				Height:  msg.Height,
 				Format:  msg.Format,
@@ -197,8 +192,7 @@ func (r *Reactor) Receive(chID byte, src p2p.Peer, msgBytes []byte) {
 				r.Logger.Debug("Received unexpected chunk, no state sync in progress", "peer", src.ID())
 				return
 			}
-			r.Logger.Debug("Received chunk, adding to sync", "height", msg.Height, "format", msg.Format,
-				"chunk", msg.Index, "peer", src.ID())
+			r.Logger.Debug("Received chunk, adding to sync", "height", msg.Height, "format", msg.Format, "chunk", msg.Index, "peer", src.ID())
 			_, err := r.syncer.AddChunk(&chunk{
 				Height: msg.Height,
 				Format: msg.Format,
@@ -207,8 +201,7 @@ func (r *Reactor) Receive(chID byte, src p2p.Peer, msgBytes []byte) {
 				Sender: src.ID(),
 			})
 			if err != nil {
-				r.Logger.Error("Failed to add chunk", "height", msg.Height, "format", msg.Format,
-					"chunk", msg.Index, "err", err)
+				r.Logger.Error("Failed to add chunk", "height", msg.Height, "format", msg.Format, "chunk", msg.Index, "err", err)
 				return
 			}
 

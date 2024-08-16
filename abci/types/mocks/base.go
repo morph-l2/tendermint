@@ -47,19 +47,6 @@ func (m BaseMock) Query(input types.RequestQuery) types.ResponseQuery {
 	return ret
 }
 
-// Mempool Connection
-// Validate a tx for the mempool
-func (m BaseMock) CheckTx(input types.RequestCheckTx) types.ResponseCheckTx {
-	var ret types.ResponseCheckTx
-	defer func() {
-		if r := recover(); r != nil {
-			ret = m.base.CheckTx(input)
-		}
-	}()
-	ret = m.Application.CheckTx(input)
-	return ret
-}
-
 // Consensus Connection
 // Initialize blockchain w validators/other info from TendermintCore
 func (m BaseMock) InitChain(input types.RequestInitChain) types.ResponseInitChain {

@@ -4,6 +4,7 @@ import (
 	"io"
 
 	"github.com/cosmos/gogoproto/proto"
+
 	"github.com/tendermint/tendermint/libs/protoio"
 )
 
@@ -51,12 +52,6 @@ func ToRequestInfo(req RequestInfo) *Request {
 func ToRequestDeliverTx(req RequestDeliverTx) *Request {
 	return &Request{
 		Value: &Request_DeliverTx{&req},
-	}
-}
-
-func ToRequestCheckTx(req RequestCheckTx) *Request {
-	return &Request{
-		Value: &Request_CheckTx{&req},
 	}
 }
 
@@ -155,12 +150,6 @@ func ToResponseInfo(res ResponseInfo) *Response {
 func ToResponseDeliverTx(res ResponseDeliverTx) *Response {
 	return &Response{
 		Value: &Response_DeliverTx{&res},
-	}
-}
-
-func ToResponseCheckTx(res ResponseCheckTx) *Response {
-	return &Response{
-		Value: &Response_CheckTx{&res},
 	}
 }
 

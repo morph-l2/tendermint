@@ -40,7 +40,6 @@ type Client interface {
 	SignClient
 	StatusClient
 	EvidenceClient
-	MempoolClient
 }
 
 // ABCIClient groups together the functionality that principally affects the
@@ -52,13 +51,7 @@ type ABCIClient interface {
 	// Reading from abci app
 	ABCIInfo(context.Context) (*ctypes.ResultABCIInfo, error)
 	ABCIQuery(ctx context.Context, path string, data bytes.HexBytes) (*ctypes.ResultABCIQuery, error)
-	ABCIQueryWithOptions(ctx context.Context, path string, data bytes.HexBytes,
-		opts ABCIQueryOptions) (*ctypes.ResultABCIQuery, error)
-
-	// Writing to abci app
-	BroadcastTxCommit(context.Context, types.Tx) (*ctypes.ResultBroadcastTxCommit, error)
-	BroadcastTxAsync(context.Context, types.Tx) (*ctypes.ResultBroadcastTx, error)
-	BroadcastTxSync(context.Context, types.Tx) (*ctypes.ResultBroadcastTx, error)
+	ABCIQueryWithOptions(ctx context.Context, path string, data bytes.HexBytes, opts ABCIQueryOptions) (*ctypes.ResultABCIQuery, error)
 }
 
 // SignClient groups together the functionality needed to get valid signatures
@@ -130,13 +123,6 @@ type EventsClient interface {
 	Unsubscribe(ctx context.Context, subscriber, query string) error
 	// UnsubscribeAll unsubscribes given subscriber from all the queries.
 	UnsubscribeAll(ctx context.Context, subscriber string) error
-}
-
-// MempoolClient shows us data about current mempool state.
-type MempoolClient interface {
-	UnconfirmedTxs(ctx context.Context, limit *int) (*ctypes.ResultUnconfirmedTxs, error)
-	NumUnconfirmedTxs(context.Context) (*ctypes.ResultUnconfirmedTxs, error)
-	CheckTx(context.Context, types.Tx) (*ctypes.ResultCheckTx, error)
 }
 
 // EvidenceClient is used for submitting an evidence of the malicious

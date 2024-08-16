@@ -181,19 +181,6 @@ type ResultBroadcastTx struct {
 	Hash bytes.HexBytes `json:"hash"`
 }
 
-// CheckTx and DeliverTx results
-type ResultBroadcastTxCommit struct {
-	CheckTx   abci.ResponseCheckTx   `json:"check_tx"`
-	DeliverTx abci.ResponseDeliverTx `json:"deliver_tx"`
-	Hash      bytes.HexBytes         `json:"hash"`
-	Height    int64                  `json:"height"`
-}
-
-// ResultCheckTx wraps abci.ResponseCheckTx.
-type ResultCheckTx struct {
-	abci.ResponseCheckTx
-}
-
 // Result of querying for a tx
 type ResultTx struct {
 	Hash     bytes.HexBytes         `json:"hash"`
@@ -216,14 +203,6 @@ type ResultBlockSearch struct {
 	TotalCount int            `json:"total_count"`
 }
 
-// List of mempool txs
-type ResultUnconfirmedTxs struct {
-	Count      int        `json:"n_txs"`
-	Total      int        `json:"total"`
-	TotalBytes int64      `json:"total_bytes"`
-	Txs        []types.Tx `json:"txs"`
-}
-
 // Info abci msg
 type ResultABCIInfo struct {
 	Response abci.ResponseInfo `json:"response"`
@@ -241,11 +220,10 @@ type ResultBroadcastEvidence struct {
 
 // empty results
 type (
-	ResultUnsafeFlushMempool struct{}
-	ResultUnsafeProfile      struct{}
-	ResultSubscribe          struct{}
-	ResultUnsubscribe        struct{}
-	ResultHealth             struct{}
+	ResultUnsafeProfile struct{}
+	ResultSubscribe     struct{}
+	ResultUnsubscribe   struct{}
+	ResultHealth        struct{}
 )
 
 // Event data from a subscription

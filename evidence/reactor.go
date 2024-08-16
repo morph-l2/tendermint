@@ -95,7 +95,6 @@ func (evR *Reactor) SetEventBus(b *types.EventBus) {
 	evR.eventBus = b
 }
 
-// Modeled after the mempool routine.
 // - Evidence accumulates in a clist.
 // - Each peer has a routine that iterates through the clist,
 // sending available evidence to the peer.

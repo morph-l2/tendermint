@@ -4,6 +4,7 @@ package mocks
 
 import (
 	mock "github.com/stretchr/testify/mock"
+
 	types "github.com/tendermint/tendermint/abci/types"
 )
 
@@ -35,20 +36,6 @@ func (_m *Application) BeginBlock(_a0 types.RequestBeginBlock) types.ResponseBeg
 		r0 = rf(_a0)
 	} else {
 		r0 = ret.Get(0).(types.ResponseBeginBlock)
-	}
-
-	return r0
-}
-
-// CheckTx provides a mock function with given fields: _a0
-func (_m *Application) CheckTx(_a0 types.RequestCheckTx) types.ResponseCheckTx {
-	ret := _m.Called(_a0)
-
-	var r0 types.ResponseCheckTx
-	if rf, ok := ret.Get(0).(func(types.RequestCheckTx) types.ResponseCheckTx); ok {
-		r0 = rf(_a0)
-	} else {
-		r0 = ret.Get(0).(types.ResponseCheckTx)
 	}
 
 	return r0

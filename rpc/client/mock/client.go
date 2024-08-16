@@ -39,7 +39,6 @@ type Client struct {
 	client.StatusClient
 	client.EventsClient
 	client.EvidenceClient
-	client.MempoolClient
 	service.Service
 }
 
@@ -97,22 +96,6 @@ func (c Client) ABCIQueryWithOptions(
 	data bytes.HexBytes,
 	opts client.ABCIQueryOptions) (*ctypes.ResultABCIQuery, error) {
 	return core.ABCIQuery(&rpctypes.Context{}, path, data, opts.Height, opts.Prove)
-}
-
-func (c Client) BroadcastTxCommit(ctx context.Context, tx types.Tx) (*ctypes.ResultBroadcastTxCommit, error) {
-	return core.BroadcastTxCommit(&rpctypes.Context{}, tx)
-}
-
-func (c Client) BroadcastTxAsync(ctx context.Context, tx types.Tx) (*ctypes.ResultBroadcastTx, error) {
-	return core.BroadcastTxAsync(&rpctypes.Context{}, tx)
-}
-
-func (c Client) BroadcastTxSync(ctx context.Context, tx types.Tx) (*ctypes.ResultBroadcastTx, error) {
-	return core.BroadcastTxSync(&rpctypes.Context{}, tx)
-}
-
-func (c Client) CheckTx(ctx context.Context, tx types.Tx) (*ctypes.ResultCheckTx, error) {
-	return core.CheckTx(&rpctypes.Context{}, tx)
 }
 
 func (c Client) NetInfo(ctx context.Context) (*ctypes.ResultNetInfo, error) {

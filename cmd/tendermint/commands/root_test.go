@@ -82,7 +82,6 @@ func TestRootHome(t *testing.T) {
 		assert.Equal(t, tc.root, config.RootDir, idxString)
 		assert.Equal(t, tc.root, config.P2P.RootDir, idxString)
 		assert.Equal(t, tc.root, config.Consensus.RootDir, idxString)
-		assert.Equal(t, tc.root, config.Mempool.RootDir, idxString)
 	}
 }
 

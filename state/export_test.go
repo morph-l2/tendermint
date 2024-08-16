@@ -4,7 +4,7 @@ import (
 	dbm "github.com/tendermint/tm-db"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	tmstate "github.com/tendermint/tendermint/proto/tendermint/state"
+	types1 "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/types"
 )
 
@@ -27,10 +27,12 @@ func UpdateState(
 	state State,
 	blockID types.BlockID,
 	header *types.Header,
-	abciResponses *tmstate.ABCIResponses,
+	consensusParamUpdates *types1.ConsensusParams,
 	validatorUpdates []*types.Validator,
-) (State, error) {
-	return updateState(state, blockID, header, abciResponses, validatorUpdates)
+) (
+	State, error,
+) {
+	return updateState(state, blockID, header, consensusParamUpdates, validatorUpdates)
 }
 
 // ValidateValidatorUpdates is an alias for validateValidatorUpdates exported

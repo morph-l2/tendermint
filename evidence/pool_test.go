@@ -188,16 +188,14 @@ func TestEvidencePoolUpdate(t *testing.T) {
 	state := pool.State()
 
 	// create new block (no need to save it to blockStore)
-	prunedEv, err := types.NewMockDuplicateVoteEvidenceWithValidator(1, defaultEvidenceTime.Add(1*time.Minute),
-		val, evidenceChainID)
+	prunedEv, err := types.NewMockDuplicateVoteEvidenceWithValidator(1, defaultEvidenceTime.Add(1*time.Minute), val, evidenceChainID)
 	require.NoError(t, err)
 	err = pool.AddEvidence(prunedEv)
 	require.NoError(t, err)
-	ev, err := types.NewMockDuplicateVoteEvidenceWithValidator(height, defaultEvidenceTime.Add(21*time.Minute),
-		val, evidenceChainID)
+	ev, err := types.NewMockDuplicateVoteEvidenceWithValidator(height, defaultEvidenceTime.Add(21*time.Minute), val, evidenceChainID)
 	require.NoError(t, err)
 	lastCommit := makeCommit(height, val.PrivKey.PubKey().Address())
-	block := types.MakeBlock(height+1, []types.Tx{}, lastCommit, []types.Evidence{ev})
+	block := types.MakeBlock(height+1, []types.Tx{}, nil, nil, nil, lastCommit, []types.Evidence{ev}) // TODO
 	// update state (partially)
 	state.LastBlockHeight = height + 1
 	state.LastBlockTime = defaultEvidenceTime.Add(22 * time.Minute)
@@ -415,7 +413,7 @@ func initializeBlockStore(db dbm.DB, state sm.State, valAddr []byte) (*store.Blo
 
 	for i := int64(1); i <= state.LastBlockHeight; i++ {
 		lastCommit := makeCommit(i-1, valAddr)
-		block := state.MakeBlock(i, test.MakeNTxs(i, 1), lastCommit, nil, state.Validators.Proposer.Address)
+		block := state.MakeBlock(i, test.MakeNTxs(i, 1), nil, lastCommit, nil, state.Validators.Proposer.Address, nil) // TODO
 		block.Header.Time = defaultEvidenceTime.Add(time.Duration(i) * time.Minute)
 		block.Header.Version = tmversion.Consensus{Block: version.BlockProtocol, App: 1}
 		const parts = 1

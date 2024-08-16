@@ -90,22 +90,3 @@ func ProcessProposal(client abcicli.Client, txBytes [][]byte, statusExp types.Re
 	fmt.Println("Passed test: ProcessProposal")
 	return nil
 }
-
-func CheckTx(client abcicli.Client, txBytes []byte, codeExp uint32, dataExp []byte) error {
-	res, _ := client.CheckTxSync(types.RequestCheckTx{Tx: txBytes})
-	code, data, log := res.Code, res.Data, res.Log
-	if code != codeExp {
-		fmt.Println("Failed test: CheckTx")
-		fmt.Printf("CheckTx response code was unexpected. Got %v expected %v. Log: %v\n",
-			code, codeExp, log)
-		return errors.New("checkTx")
-	}
-	if !bytes.Equal(data, dataExp) {
-		fmt.Println("Failed test: CheckTx")
-		fmt.Printf("CheckTx response data was unexpected. Got %X expected %X\n",
-			data, dataExp)
-		return errors.New("checkTx")
-	}
-	fmt.Println("Passed test: CheckTx")
-	return nil
-}

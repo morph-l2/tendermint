@@ -56,6 +56,7 @@ type Vote struct {
 	ValidatorAddress Address               `json:"validator_address"`
 	ValidatorIndex   int32                 `json:"validator_index"`
 	Signature        []byte                `json:"signature"`
+	BLSSignature     []byte                `json:"bls_signature"`
 }
 
 // CommitSig converts the Vote to a CommitSig.
@@ -79,6 +80,7 @@ func (vote *Vote) CommitSig() CommitSig {
 		ValidatorAddress: vote.ValidatorAddress,
 		Timestamp:        vote.Timestamp,
 		Signature:        vote.Signature,
+		BLSSignature:     vote.BLSSignature,
 	}
 }
 
@@ -198,6 +200,15 @@ func (vote *Vote) ValidateBasic() error {
 		return fmt.Errorf("signature is too big (max: %d)", MaxSignatureSize)
 	}
 
+	if len(vote.BlockID.BatchHash) == 0 && len(vote.BLSSignature) > 0 {
+		return errors.New("blsSignature cannot exist when batchHash is empty")
+	}
+
+	// only check it if it is `precommit` vote; no need to sign a bls signature during `prevote`
+	if vote.Type == tmproto.PrecommitType && len(vote.BlockID.BatchHash) > 0 && len(vote.BLSSignature) == 0 {
+		return errors.New("blsSignature must exist when batchHash is not empty")
+	}
+
 	return nil
 }
 
@@ -217,6 +228,7 @@ func (vote *Vote) ToProto() *tmproto.Vote {
 		ValidatorAddress: vote.ValidatorAddress,
 		ValidatorIndex:   vote.ValidatorIndex,
 		Signature:        vote.Signature,
+		BLSSignature:     vote.BLSSignature,
 	}
 }
 
@@ -257,6 +269,7 @@ func VoteFromProto(pv *tmproto.Vote) (*Vote, error) {
 	vote.ValidatorAddress = pv.ValidatorAddress
 	vote.ValidatorIndex = pv.ValidatorIndex
 	vote.Signature = pv.Signature
+	vote.BLSSignature = pv.BLSSignature
 
 	return vote, vote.ValidateBasic()
 }

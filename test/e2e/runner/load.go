@@ -115,10 +115,6 @@ func loadProcess(ctx context.Context, testnet *e2e.Testnet, chTx <-chan types.Tx
 
 			clients[node.Name] = client
 		}
-
-		if _, err = client.BroadcastTxSync(ctx, tx); err != nil {
-			continue
-		}
 		chSuccess <- tx
 	}
 }

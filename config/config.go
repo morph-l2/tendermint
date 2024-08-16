@@ -23,11 +23,6 @@ const (
 
 	// DefaultLogLevel defines a default log level as INFO.
 	DefaultLogLevel = "info"
-
-	// Mempool versions. V1 is prioritized mempool, v0 is regular mempool.
-	// Default is v0.
-	MempoolV0 = "v0"
-	MempoolV1 = "v1"
 )
 
 // NOTE: Most of the structs & relevant comments + the
@@ -49,6 +44,7 @@ var (
 
 	defaultNodeKeyName  = "node_key.json"
 	defaultAddrBookName = "addrbook.json"
+	defaultBLSKeyName   = "bls_key.json"
 
 	defaultConfigFilePath   = filepath.Join(defaultConfigDir, defaultConfigFileName)
 	defaultGenesisJSONPath  = filepath.Join(defaultConfigDir, defaultGenesisJSONName)
@@ -57,6 +53,7 @@ var (
 
 	defaultNodeKeyPath  = filepath.Join(defaultConfigDir, defaultNodeKeyName)
 	defaultAddrBookPath = filepath.Join(defaultConfigDir, defaultAddrBookName)
+	defaultBLSKeyPath   = filepath.Join(defaultConfigDir, defaultBLSKeyName)
 
 	minSubscriptionBufferSize     = 100
 	defaultSubscriptionBufferSize = 200
@@ -70,7 +67,6 @@ type Config struct {
 	// Options for services
 	RPC       *RPCConfig       `mapstructure:"rpc"`
 	P2P       *P2PConfig       `mapstructure:"p2p"`
-	Mempool   *MempoolConfig   `mapstructure:"mempool"`
 	StateSync *StateSyncConfig `mapstructure:"statesync"`
 	BlockSync *BlockSyncConfig `mapstructure:"blocksync"`
 	//TODO(williambanfield): remove this field once v0.37 is released.
@@ -88,7 +84,6 @@ func DefaultConfig() *Config {
 		BaseConfig:      DefaultBaseConfig(),
 		RPC:             DefaultRPCConfig(),
 		P2P:             DefaultP2PConfig(),
-		Mempool:         DefaultMempoolConfig(),
 		StateSync:       DefaultStateSyncConfig(),
 		BlockSync:       DefaultBlockSyncConfig(),
 		Consensus:       DefaultConsensusConfig(),
@@ -104,7 +99,6 @@ func TestConfig() *Config {
 		BaseConfig:      TestBaseConfig(),
 		RPC:             TestRPCConfig(),
 		P2P:             TestP2PConfig(),
-		Mempool:         TestMempoolConfig(),
 		StateSync:       TestStateSyncConfig(),
 		BlockSync:       TestBlockSyncConfig(),
 		Consensus:       TestConsensusConfig(),
@@ -119,7 +113,6 @@ func (cfg *Config) SetRoot(root string) *Config {
 	cfg.BaseConfig.RootDir = root
 	cfg.RPC.RootDir = root
 	cfg.P2P.RootDir = root
-	cfg.Mempool.RootDir = root
 	cfg.Consensus.RootDir = root
 	return cfg
 }
@@ -135,9 +128,6 @@ func (cfg *Config) ValidateBasic() error {
 	}
 	if err := cfg.P2P.ValidateBasic(); err != nil {
 		return fmt.Errorf("error in [p2p] section: %w", err)
-	}
-	if err := cfg.Mempool.ValidateBasic(); err != nil {
-		return fmt.Errorf("error in [mempool] section: %w", err)
 	}
 	if err := cfg.StateSync.ValidateBasic(); err != nil {
 		return fmt.Errorf("error in [statesync] section: %w", err)
@@ -239,6 +229,9 @@ type BaseConfig struct { //nolint: maligned
 	// A JSON file containing the private key to use for p2p authenticated encryption
 	NodeKey string `mapstructure:"node_key_file"`
 
+	// Path to the JSON file containing bls key
+	BLSKey string `mapstructure:"bls_key_file"`
+
 	// Mechanism to connect to the ABCI application: socket | grpc
 	ABCI string `mapstructure:"abci"`
 
@@ -254,12 +247,13 @@ func DefaultBaseConfig() BaseConfig {
 		PrivValidatorKey:   defaultPrivValKeyPath,
 		PrivValidatorState: defaultPrivValStatePath,
 		NodeKey:            defaultNodeKeyPath,
+		BLSKey:             defaultBLSKeyPath,
 		Moniker:            defaultMoniker,
 		ProxyApp:           "tcp://127.0.0.1:26658",
 		ABCI:               "socket",
 		LogLevel:           DefaultLogLevel,
 		LogFormat:          LogFormatPlain,
-		BlockSyncMode:      true,
+		BlockSyncMode:      false,
 		FilterPeers:        false,
 		DBBackend:          "goleveldb",
 		DBPath:             "data",
@@ -298,6 +292,11 @@ func (cfg BaseConfig) PrivValidatorStateFile() string {
 // NodeKeyFile returns the full path to the node_key.json file
 func (cfg BaseConfig) NodeKeyFile() string {
 	return rootify(cfg.NodeKey, cfg.RootDir)
+}
+
+// BLSPrivKeyFile returns the full path to the bls_priv_key.json file
+func (cfg BaseConfig) BLSKeyFile() string {
+	return rootify(cfg.BLSKey, cfg.RootDir)
 }
 
 // DBDir returns the full path to the database directory
@@ -695,112 +694,6 @@ func DefaultFuzzConnConfig() *FuzzConnConfig {
 		ProbDropConn: 0.00,
 		ProbSleep:    0.00,
 	}
-}
-
-//-----------------------------------------------------------------------------
-// MempoolConfig
-
-// MempoolConfig defines the configuration options for the Tendermint mempool
-type MempoolConfig struct {
-	// Mempool version to use:
-	//  1) "v0" - (default) FIFO mempool.
-	//  2) "v1" - prioritized mempool.
-	// WARNING: There's a known memory leak with the prioritized mempool
-	// that the team are working on. Read more here:
-	// https://github.com/tendermint/tendermint/issues/8775
-	Version   string `mapstructure:"version"`
-	RootDir   string `mapstructure:"home"`
-	Recheck   bool   `mapstructure:"recheck"`
-	Broadcast bool   `mapstructure:"broadcast"`
-	WalPath   string `mapstructure:"wal_dir"`
-	// Maximum number of transactions in the mempool
-	Size int `mapstructure:"size"`
-	// Limit the total size of all txs in the mempool.
-	// This only accounts for raw transactions (e.g. given 1MB transactions and
-	// max_txs_bytes=5MB, mempool will only accept 5 transactions).
-	MaxTxsBytes int64 `mapstructure:"max_txs_bytes"`
-	// Size of the cache (used to filter transactions we saw earlier) in transactions
-	CacheSize int `mapstructure:"cache_size"`
-	// Do not remove invalid transactions from the cache (default: false)
-	// Set to true if it's not possible for any invalid transaction to become
-	// valid again in the future.
-	KeepInvalidTxsInCache bool `mapstructure:"keep-invalid-txs-in-cache"`
-	// Maximum size of a single transaction
-	// NOTE: the max size of a tx transmitted over the network is {max_tx_bytes}.
-	MaxTxBytes int `mapstructure:"max_tx_bytes"`
-	// Maximum size of a batch of transactions to send to a peer
-	// Including space needed by encoding (one varint per transaction).
-	// XXX: Unused due to https://github.com/tendermint/tendermint/issues/5796
-	MaxBatchBytes int `mapstructure:"max_batch_bytes"`
-
-	// TTLDuration, if non-zero, defines the maximum amount of time a transaction
-	// can exist for in the mempool.
-	//
-	// Note, if TTLNumBlocks is also defined, a transaction will be removed if it
-	// has existed in the mempool at least TTLNumBlocks number of blocks or if it's
-	// insertion time into the mempool is beyond TTLDuration.
-	TTLDuration time.Duration `mapstructure:"ttl-duration"`
-
-	// TTLNumBlocks, if non-zero, defines the maximum number of blocks a transaction
-	// can exist for in the mempool.
-	//
-	// Note, if TTLDuration is also defined, a transaction will be removed if it
-	// has existed in the mempool at least TTLNumBlocks number of blocks or if
-	// it's insertion time into the mempool is beyond TTLDuration.
-	TTLNumBlocks int64 `mapstructure:"ttl-num-blocks"`
-}
-
-// DefaultMempoolConfig returns a default configuration for the Tendermint mempool
-func DefaultMempoolConfig() *MempoolConfig {
-	return &MempoolConfig{
-		Version:   MempoolV0,
-		Recheck:   true,
-		Broadcast: true,
-		WalPath:   "",
-		// Each signature verification takes .5ms, Size reduced until we implement
-		// ABCI Recheck
-		Size:         5000,
-		MaxTxsBytes:  1024 * 1024 * 1024, // 1GB
-		CacheSize:    10000,
-		MaxTxBytes:   1024 * 1024, // 1MB
-		TTLDuration:  0 * time.Second,
-		TTLNumBlocks: 0,
-	}
-}
-
-// TestMempoolConfig returns a configuration for testing the Tendermint mempool
-func TestMempoolConfig() *MempoolConfig {
-	cfg := DefaultMempoolConfig()
-	cfg.CacheSize = 1000
-	return cfg
-}
-
-// WalDir returns the full path to the mempool's write-ahead log
-func (cfg *MempoolConfig) WalDir() string {
-	return rootify(cfg.WalPath, cfg.RootDir)
-}
-
-// WalEnabled returns true if the WAL is enabled.
-func (cfg *MempoolConfig) WalEnabled() bool {
-	return cfg.WalPath != ""
-}
-
-// ValidateBasic performs basic validation (checking param bounds, etc.) and
-// returns an error if any check fails.
-func (cfg *MempoolConfig) ValidateBasic() error {
-	if cfg.Size < 0 {
-		return errors.New("size can't be negative")
-	}
-	if cfg.MaxTxsBytes < 0 {
-		return errors.New("max_txs_bytes can't be negative")
-	}
-	if cfg.CacheSize < 0 {
-		return errors.New("cache_size can't be negative")
-	}
-	if cfg.MaxTxBytes < 0 {
-		return errors.New("max_tx_bytes can't be negative")
-	}
-	return nil
 }
 
 //-----------------------------------------------------------------------------

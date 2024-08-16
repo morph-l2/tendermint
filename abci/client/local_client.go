@@ -86,17 +86,6 @@ func (app *localClient) DeliverTxAsync(params types.RequestDeliverTx) *ReqRes {
 	)
 }
 
-func (app *localClient) CheckTxAsync(req types.RequestCheckTx) *ReqRes {
-	app.mtx.Lock()
-	defer app.mtx.Unlock()
-
-	res := app.Application.CheckTx(req)
-	return app.callback(
-		types.ToRequestCheckTx(req),
-		types.ToResponseCheckTx(res),
-	)
-}
-
 func (app *localClient) QueryAsync(req types.RequestQuery) *ReqRes {
 	app.mtx.Lock()
 	defer app.mtx.Unlock()
@@ -241,14 +230,6 @@ func (app *localClient) DeliverTxSync(req types.RequestDeliverTx) (*types.Respon
 	defer app.mtx.Unlock()
 
 	res := app.Application.DeliverTx(req)
-	return &res, nil
-}
-
-func (app *localClient) CheckTxSync(req types.RequestCheckTx) (*types.ResponseCheckTx, error) {
-	app.mtx.Lock()
-	defer app.mtx.Unlock()
-
-	res := app.Application.CheckTx(req)
 	return &res, nil
 }
 

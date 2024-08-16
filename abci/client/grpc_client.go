@@ -25,7 +25,7 @@ type grpcClient struct {
 
 	client   types.ABCIApplicationClient
 	conn     *grpc.ClientConn
-	chReqRes chan *ReqRes // dispatches "async" responses to callbacks *in order*, needed by mempool
+	chReqRes chan *ReqRes // dispatches "async" responses to callbacks *in order*
 
 	mtx   tmsync.Mutex
 	addr  string
@@ -159,7 +159,6 @@ func (cli *grpcClient) SetResponseCallback(resCb Callback) {
 
 //----------------------------------------
 // GRPC calls are synchronous, but some callbacks expect to be called asynchronously
-// (eg. the mempool expects to be able to lock to remove bad txs from cache).
 // To accommodate, we finish each call in its own go-routine,
 // which is expensive, but easy - if you want something better, use the socket protocol!
 // maybe one day, if people really want it, we use grpc streams,
@@ -199,15 +198,6 @@ func (cli *grpcClient) DeliverTxAsync(params types.RequestDeliverTx) *ReqRes {
 		cli.StopForError(err)
 	}
 	return cli.finishAsyncCall(req, &types.Response{Value: &types.Response_DeliverTx{DeliverTx: res}})
-}
-
-func (cli *grpcClient) CheckTxAsync(params types.RequestCheckTx) *ReqRes {
-	req := types.ToRequestCheckTx(params)
-	res, err := cli.client.CheckTx(context.Background(), req.GetCheckTx(), grpc.WaitForReady(true))
-	if err != nil {
-		cli.StopForError(err)
-	}
-	return cli.finishAsyncCall(req, &types.Response{Value: &types.Response_CheckTx{CheckTx: res}})
 }
 
 func (cli *grpcClient) QueryAsync(params types.RequestQuery) *ReqRes {
@@ -369,11 +359,6 @@ func (cli *grpcClient) InfoSync(req types.RequestInfo) (*types.ResponseInfo, err
 func (cli *grpcClient) DeliverTxSync(params types.RequestDeliverTx) (*types.ResponseDeliverTx, error) {
 	reqres := cli.DeliverTxAsync(params)
 	return cli.finishSyncCall(reqres).GetDeliverTx(), cli.Error()
-}
-
-func (cli *grpcClient) CheckTxSync(params types.RequestCheckTx) (*types.ResponseCheckTx, error) {
-	reqres := cli.CheckTxAsync(params)
-	return cli.finishSyncCall(reqres).GetCheckTx(), cli.Error()
 }
 
 func (cli *grpcClient) QuerySync(req types.RequestQuery) (*types.ResponseQuery, error) {

@@ -252,29 +252,6 @@ func (_m *Client) BroadcastTxAsync(_a0 context.Context, _a1 types.Tx) (*coretype
 	return r0, r1
 }
 
-// BroadcastTxCommit provides a mock function with given fields: _a0, _a1
-func (_m *Client) BroadcastTxCommit(_a0 context.Context, _a1 types.Tx) (*coretypes.ResultBroadcastTxCommit, error) {
-	ret := _m.Called(_a0, _a1)
-
-	var r0 *coretypes.ResultBroadcastTxCommit
-	if rf, ok := ret.Get(0).(func(context.Context, types.Tx) *coretypes.ResultBroadcastTxCommit); ok {
-		r0 = rf(_a0, _a1)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*coretypes.ResultBroadcastTxCommit)
-		}
-	}
-
-	var r1 error
-	if rf, ok := ret.Get(1).(func(context.Context, types.Tx) error); ok {
-		r1 = rf(_a0, _a1)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
 // BroadcastTxSync provides a mock function with given fields: _a0, _a1
 func (_m *Client) BroadcastTxSync(_a0 context.Context, _a1 types.Tx) (*coretypes.ResultBroadcastTx, error) {
 	ret := _m.Called(_a0, _a1)
@@ -285,29 +262,6 @@ func (_m *Client) BroadcastTxSync(_a0 context.Context, _a1 types.Tx) (*coretypes
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*coretypes.ResultBroadcastTx)
-		}
-	}
-
-	var r1 error
-	if rf, ok := ret.Get(1).(func(context.Context, types.Tx) error); ok {
-		r1 = rf(_a0, _a1)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// CheckTx provides a mock function with given fields: _a0, _a1
-func (_m *Client) CheckTx(_a0 context.Context, _a1 types.Tx) (*coretypes.ResultCheckTx, error) {
-	ret := _m.Called(_a0, _a1)
-
-	var r0 *coretypes.ResultCheckTx
-	if rf, ok := ret.Get(0).(func(context.Context, types.Tx) *coretypes.ResultCheckTx); ok {
-		r0 = rf(_a0, _a1)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*coretypes.ResultCheckTx)
 		}
 	}
 
@@ -458,6 +412,7 @@ func (_m *Client) GenesisChunked(_a0 context.Context, _a1 uint) (*coretypes.Resu
 
 	return r0, r1
 }
+
 // Header provides a mock function with given fields: ctx, height
 func (_m *Client) Header(ctx context.Context, height *int64) (*coretypes.ResultHeader, error) {
 	ret := _m.Called(ctx, height)
@@ -551,29 +506,6 @@ func (_m *Client) NetInfo(_a0 context.Context) (*coretypes.ResultNetInfo, error)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*coretypes.ResultNetInfo)
-		}
-	}
-
-	var r1 error
-	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = rf(_a0)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// NumUnconfirmedTxs provides a mock function with given fields: _a0
-func (_m *Client) NumUnconfirmedTxs(_a0 context.Context) (*coretypes.ResultUnconfirmedTxs, error) {
-	ret := _m.Called(_a0)
-
-	var r0 *coretypes.ResultUnconfirmedTxs
-	if rf, ok := ret.Get(0).(func(context.Context) *coretypes.ResultUnconfirmedTxs); ok {
-		r0 = rf(_a0)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*coretypes.ResultUnconfirmedTxs)
 		}
 	}
 
@@ -789,29 +721,6 @@ func (_m *Client) TxSearch(ctx context.Context, query string, prove bool, page *
 	var r1 error
 	if rf, ok := ret.Get(1).(func(context.Context, string, bool, *int, *int, string) error); ok {
 		r1 = rf(ctx, query, prove, page, perPage, orderBy)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// UnconfirmedTxs provides a mock function with given fields: ctx, limit
-func (_m *Client) UnconfirmedTxs(ctx context.Context, limit *int) (*coretypes.ResultUnconfirmedTxs, error) {
-	ret := _m.Called(ctx, limit)
-
-	var r0 *coretypes.ResultUnconfirmedTxs
-	if rf, ok := ret.Get(0).(func(context.Context, *int) *coretypes.ResultUnconfirmedTxs); ok {
-		r0 = rf(ctx, limit)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*coretypes.ResultUnconfirmedTxs)
-		}
-	}
-
-	var r1 error
-	if rf, ok := ret.Get(1).(func(context.Context, *int) error); ok {
-		r1 = rf(ctx, limit)
 	} else {
 		r1 = ret.Error(1)
 	}

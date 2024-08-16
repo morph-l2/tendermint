@@ -13,6 +13,7 @@ import (
 	dbm "github.com/tendermint/tm-db"
 
 	cfg "github.com/tendermint/tendermint/config"
+	"github.com/tendermint/tendermint/l2node"
 	"github.com/tendermint/tendermint/libs/log"
 	tmos "github.com/tendermint/tendermint/libs/os"
 	"github.com/tendermint/tendermint/proxy"
@@ -129,8 +130,15 @@ func (pb *playback) replayReset(count int, newStepSub types.Subscription) error 
 	}
 	pb.cs.Wait()
 
-	newCS := NewState(pb.cs.config, pb.genesisState.Copy(), pb.cs.blockExec,
-		pb.cs.blockStore, pb.cs.txNotifier, pb.cs.evpool)
+	newCS := NewState(
+		pb.cs.l2Node,
+		pb.cs.config,
+		pb.genesisState.Copy(),
+		pb.cs.blockExec,
+		pb.cs.blockStore,
+		pb.cs.txNotifier,
+		pb.cs.evpool,
+	)
 	newCS.SetEventBus(pb.cs.eventBus)
 	newCS.startForReplay()
 
@@ -309,7 +317,7 @@ func newConsensusStateForReplay(config cfg.BaseConfig, csConfig *cfg.ConsensusCo
 		tmos.Exit(err.Error())
 	}
 
-	// Create proxyAppConn connection (consensus, mempool, query)
+	// Create proxyAppConn connection (consensus, query)
 	clientCreator := proxy.DefaultClientCreator(config.ProxyApp, config.ABCI, config.DBDir())
 	proxyApp := proxy.NewAppConns(clientCreator, proxy.NopMetrics())
 	err = proxyApp.Start()
@@ -324,16 +332,24 @@ func newConsensusStateForReplay(config cfg.BaseConfig, csConfig *cfg.ConsensusCo
 
 	handshaker := NewHandshaker(stateStore, state, blockStore, gdoc)
 	handshaker.SetEventBus(eventBus)
-	err = handshaker.Handshake(proxyApp)
+	err = handshaker.Handshake(proxyApp, nil)
 	if err != nil {
 		tmos.Exit(fmt.Sprintf("Error on handshake: %v", err))
 	}
 
-	mempool, evpool := emptyMempool{}, sm.EmptyEvidencePool{}
-	blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyApp.Consensus(), mempool, evpool)
+	notifier, evpool := &l2node.Notifier{}, sm.EmptyEvidencePool{}
 
-	consensusState := NewState(csConfig, state.Copy(), blockExec,
-		blockStore, mempool, evpool)
+	blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyApp.Consensus(), nil, notifier, evpool)
+
+	consensusState := NewState(
+		nil, // TODO
+		csConfig,
+		state.Copy(),
+		blockExec,
+		blockStore,
+		notifier,
+		evpool,
+	)
 
 	consensusState.SetEventBus(eventBus)
 	return consensusState

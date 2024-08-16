@@ -348,6 +348,9 @@ type Header struct {
 	// consensus info
 	EvidenceHash    tmbytes.HexBytes `json:"evidence_hash"`    // evidence included in the block
 	ProposerAddress Address          `json:"proposer_address"` // original proposer of the block
+
+	// batch info
+	BatchHash tmbytes.HexBytes `json:"batch_hash"`
 }
 
 // Populate the Header with state-derived data.
@@ -428,6 +431,10 @@ func (h Header) ValidateBasic() error {
 		return fmt.Errorf("wrong LastResultsHash: %v", err)
 	}
 
+	if err := ValidateHash(h.BatchHash); err != nil {
+		return fmt.Errorf("wrong BatchHash: %v", err)
+	}
+
 	return nil
 }
 
@@ -471,7 +478,12 @@ func (h *Header) Hash() tmbytes.HexBytes {
 		cdcEncode(h.LastResultsHash),
 		cdcEncode(h.EvidenceHash),
 		cdcEncode(h.ProposerAddress),
+		cdcEncode(h.BatchHash),
 	})
+}
+
+func (h *Header) IsBatchPoint() bool {
+	return len(h.BatchHash) > 0
 }
 
 // StringIndented returns an indented string representation of the header.
@@ -534,6 +546,7 @@ func (h *Header) ToProto() *tmproto.Header {
 		LastResultsHash:    h.LastResultsHash,
 		LastCommitHash:     h.LastCommitHash,
 		ProposerAddress:    h.ProposerAddress,
+		BatchHash:          h.BatchHash,
 	}
 }
 
@@ -566,6 +579,7 @@ func HeaderFromProto(ph *tmproto.Header) (Header, error) {
 	h.LastResultsHash = ph.LastResultsHash
 	h.LastCommitHash = ph.LastCommitHash
 	h.ProposerAddress = ph.ProposerAddress
+	h.BatchHash = ph.BatchHash
 
 	return *h, h.ValidateBasic()
 }
@@ -598,15 +612,22 @@ type CommitSig struct {
 	ValidatorAddress Address     `json:"validator_address"`
 	Timestamp        time.Time   `json:"timestamp"`
 	Signature        []byte      `json:"signature"`
+	BLSSignature     []byte      `json:"bls_signature"`
 }
 
 // NewCommitSigForBlock returns new CommitSig with BlockIDFlagCommit.
-func NewCommitSigForBlock(signature []byte, valAddr Address, ts time.Time) CommitSig {
+func NewCommitSigForBlock(
+	signature []byte,
+	valAddr Address,
+	ts time.Time,
+	blsSignature []byte,
+) CommitSig {
 	return CommitSig{
 		BlockIDFlag:      BlockIDFlagCommit,
 		ValidatorAddress: valAddr,
 		Timestamp:        ts,
 		Signature:        signature,
+		BLSSignature:     blsSignature,
 	}
 }
 
@@ -641,11 +662,13 @@ func (cs CommitSig) Absent() bool {
 // 3. block ID flag
 // 4. timestamp
 func (cs CommitSig) String() string {
-	return fmt.Sprintf("CommitSig{%X by %X on %v @ %s}",
+	return fmt.Sprintf("CommitSig{%X by %X on %v @ %s, BLSSig %X}",
 		tmbytes.Fingerprint(cs.Signature),
 		tmbytes.Fingerprint(cs.ValidatorAddress),
 		cs.BlockIDFlag,
-		CanonicalTime(cs.Timestamp))
+		CanonicalTime(cs.Timestamp),
+		tmbytes.Fingerprint(cs.BLSSignature),
+	)
 }
 
 // BlockID returns the Commit's BlockID if CommitSig indicates signing,
@@ -686,6 +709,7 @@ func (cs CommitSig) ValidateBasic() error {
 		if len(cs.Signature) != 0 {
 			return errors.New("signature is present")
 		}
+		// TODO
 	default:
 		if len(cs.ValidatorAddress) != crypto.AddressSize {
 			return fmt.Errorf("expected ValidatorAddress size to be %d bytes, got %d bytes",
@@ -700,6 +724,7 @@ func (cs CommitSig) ValidateBasic() error {
 		if len(cs.Signature) > MaxSignatureSize {
 			return fmt.Errorf("signature is too big (max: %d)", MaxSignatureSize)
 		}
+		// TODO
 	}
 
 	return nil
@@ -716,6 +741,7 @@ func (cs *CommitSig) ToProto() *tmproto.CommitSig {
 		ValidatorAddress: cs.ValidatorAddress,
 		Timestamp:        cs.Timestamp,
 		Signature:        cs.Signature,
+		BLSSignature:     cs.BLSSignature,
 	}
 }
 
@@ -726,6 +752,7 @@ func (cs *CommitSig) FromProto(csp tmproto.CommitSig) error {
 	cs.ValidatorAddress = csp.ValidatorAddress
 	cs.Timestamp = csp.Timestamp
 	cs.Signature = csp.Signature
+	cs.BLSSignature = csp.BLSSignature
 
 	return cs.ValidateBasic()
 }
@@ -792,6 +819,7 @@ func (commit *Commit) GetVote(valIdx int32) *Vote {
 		ValidatorAddress: commitSig.ValidatorAddress,
 		ValidatorIndex:   valIdx,
 		Signature:        commitSig.Signature,
+		BLSSignature:     commitSig.BLSSignature,
 	}
 }
 
@@ -993,17 +1021,33 @@ type Data struct {
 	// This means that block.AppHash does not include these txs.
 	Txs Txs `json:"txs"`
 
+	L2BlockMeta   tmbytes.HexBytes
+	L2BatchHeader tmbytes.HexBytes
+
+	NextValidators      [][]byte
+	BatchBlocksInterval int64
+	BatchMaxBytes       int64
+	BatchTimeout        int64
+
 	// Volatile
 	hash tmbytes.HexBytes
+
+	zkHash tmbytes.HexBytes
 }
 
+// TODO
 // Hash returns the hash of the data
 func (data *Data) Hash() tmbytes.HexBytes {
 	if data == nil {
 		return (Txs{}).Hash()
 	}
 	if data.hash == nil {
-		data.hash = data.Txs.Hash() // NOTE: leaves of merkle tree are TxIDs
+		//data.hash = data.Txs.Hash() // NOTE: leaves of merkle tree are TxIDs
+		data.hash = merkle.HashFromByteSlices([][]byte{
+			data.Txs.Hash(),
+			tmhash.Sum(data.L2BlockMeta),
+			tmhash.Sum(data.L2BatchHeader),
+		})
 	}
 	return data.hash
 }
@@ -1039,6 +1083,8 @@ func (data *Data) ToProto() tmproto.Data {
 		}
 		tp.Txs = txBzs
 	}
+	tp.L2BlockMeta = data.L2BlockMeta
+	tp.L2BatchHeader = data.L2BatchHeader
 
 	return *tp
 }
@@ -1060,6 +1106,9 @@ func DataFromProto(dp *tmproto.Data) (Data, error) {
 	} else {
 		data.Txs = Txs{}
 	}
+
+	data.L2BlockMeta = dp.L2BlockMeta
+	data.L2BatchHeader = dp.L2BatchHeader
 
 	return *data, nil
 }
@@ -1160,12 +1209,14 @@ func (data *EvidenceData) FromProto(eviData *tmproto.EvidenceList) error {
 // BlockID
 type BlockID struct {
 	Hash          tmbytes.HexBytes `json:"hash"`
+	BatchHash     tmbytes.HexBytes `json:"batch_hash"`
 	PartSetHeader PartSetHeader    `json:"parts"`
 }
 
 // Equals returns true if the BlockID matches the given BlockID
 func (blockID BlockID) Equals(other BlockID) bool {
 	return bytes.Equal(blockID.Hash, other.Hash) &&
+		bytes.Equal(blockID.BatchHash, other.BatchHash) &&
 		blockID.PartSetHeader.Equals(other.PartSetHeader)
 }
 
@@ -1177,7 +1228,7 @@ func (blockID BlockID) Key() string {
 		panic(err)
 	}
 
-	return fmt.Sprint(string(blockID.Hash), string(bz))
+	return fmt.Sprint(string(blockID.Hash), string(blockID.BatchHash), string(bz))
 }
 
 // ValidateBasic performs basic validation.
@@ -1185,6 +1236,11 @@ func (blockID BlockID) ValidateBasic() error {
 	// Hash can be empty in case of POLBlockID in Proposal.
 	if err := ValidateHash(blockID.Hash); err != nil {
 		return fmt.Errorf("wrong Hash")
+	}
+	if len(blockID.BatchHash) > 0 {
+		if err := ValidateHash(blockID.BatchHash); err != nil {
+			return fmt.Errorf("wrong BatchHash")
+		}
 	}
 	if err := blockID.PartSetHeader.ValidateBasic(); err != nil {
 		return fmt.Errorf("wrong PartSetHeader: %v", err)
@@ -1195,6 +1251,7 @@ func (blockID BlockID) ValidateBasic() error {
 // IsZero returns true if this is the BlockID of a nil block.
 func (blockID BlockID) IsZero() bool {
 	return len(blockID.Hash) == 0 &&
+		len(blockID.BatchHash) == 0 &&
 		blockID.PartSetHeader.IsZero()
 }
 
@@ -1212,7 +1269,7 @@ func (blockID BlockID) IsComplete() bool {
 //
 // See PartSetHeader#String
 func (blockID BlockID) String() string {
-	return fmt.Sprintf(`%v:%v`, blockID.Hash, blockID.PartSetHeader)
+	return fmt.Sprintf(`%v:%v:%v`, blockID.Hash, blockID.BatchHash, blockID.PartSetHeader)
 }
 
 // ToProto converts BlockID to protobuf
@@ -1223,6 +1280,7 @@ func (blockID *BlockID) ToProto() tmproto.BlockID {
 
 	return tmproto.BlockID{
 		Hash:          blockID.Hash,
+		BatchHash:     blockID.BatchHash,
 		PartSetHeader: blockID.PartSetHeader.ToProto(),
 	}
 }
@@ -1242,6 +1300,7 @@ func BlockIDFromProto(bID *tmproto.BlockID) (*BlockID, error) {
 
 	blockID.PartSetHeader = *ph
 	blockID.Hash = bID.Hash
+	blockID.BatchHash = bID.BatchHash
 
 	return blockID, blockID.ValidateBasic()
 }

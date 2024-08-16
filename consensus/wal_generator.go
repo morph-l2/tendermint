@@ -12,7 +12,9 @@ import (
 	db "github.com/tendermint/tm-db"
 
 	"github.com/tendermint/tendermint/abci/example/kvstore"
+	"github.com/tendermint/tendermint/blssignatures"
 	cfg "github.com/tendermint/tendermint/config"
+	"github.com/tendermint/tendermint/l2node"
 	"github.com/tendermint/tendermint/libs/log"
 	tmrand "github.com/tendermint/tendermint/libs/rand"
 	"github.com/tendermint/tendermint/privval"
@@ -82,14 +84,21 @@ func WALGenerateNBlocks(t *testing.T, wr io.Writer, numBlocks int) (err error) {
 			t.Error(err)
 		}
 	})
-	mempool := emptyMempool{}
+	notifier := &l2node.Notifier{}
 	evpool := sm.EmptyEvidencePool{}
-	blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyApp.Consensus(), mempool, evpool)
-	consensusState := NewState(config.Consensus, state.Copy(), blockExec, blockStore, mempool, evpool)
+	blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyApp.Consensus(), nil, notifier, evpool)
+	consensusState := NewState(nil, config.Consensus, state.Copy(), blockExec, blockStore, notifier, evpool) // TODO
 	consensusState.SetLogger(logger)
 	consensusState.SetEventBus(eventBus)
 	if privValidator != nil {
 		consensusState.SetPrivValidator(privValidator)
+	}
+	blsPrivKey, err := blssignatures.PrivateKeyFromBytes(blssignatures.LoadBLSKey(config.BLSKeyFile()).PrivKey)
+	if err != nil {
+		t.Error(err)
+	}
+	if privValidator != nil {
+		consensusState.SetBLSPrivKey(&blsPrivKey)
 	}
 	// END OF COPY PASTE
 

@@ -7,6 +7,8 @@ import (
 	"os"
 	"time"
 
+	tmbytes "github.com/tendermint/tendermint/libs/bytes"
+
 	"github.com/cosmos/gogoproto/proto"
 
 	tmstate "github.com/tendermint/tendermint/proto/tendermint/state"
@@ -234,13 +236,12 @@ func FromProto(pb *tmstate.State) (*State, error) { //nolint:golint
 func (state State) MakeBlock(
 	height int64,
 	txs []types.Tx,
+	blockMeta []byte,
 	lastCommit *types.Commit,
 	evidence []types.Evidence,
 	proposerAddress []byte,
+	decideBatchPoint decideBatchPointFunc,
 ) *types.Block {
-
-	// Build base block with block data.
-	block := types.MakeBlock(height, txs, lastCommit, evidence)
 
 	// Set time.
 	var timestamp time.Time
@@ -250,12 +251,25 @@ func (state State) MakeBlock(
 		timestamp = MedianTime(lastCommit, state.LastValidators)
 	}
 
+	var batchHash, batchHeader []byte
+	if decideBatchPoint != nil {
+		batchHash, batchHeader = decideBatchPoint(blockMeta, txs, height, timestamp)
+	}
+
+	// Build base block with block data.
+	block := types.MakeBlock(height, txs, blockMeta, batchHash, batchHeader, lastCommit, evidence)
+
 	// Fill rest of header with state data.
 	block.Header.Populate(
-		state.Version.Consensus, state.ChainID,
-		timestamp, state.LastBlockID,
-		state.Validators.Hash(), state.NextValidators.Hash(),
-		state.ConsensusParams.Hash(), state.AppHash, state.LastResultsHash,
+		state.Version.Consensus,
+		state.ChainID,
+		timestamp,
+		state.LastBlockID,
+		state.Validators.Hash(),
+		state.NextValidators.Hash(),
+		state.ConsensusParams.Hash(),
+		state.AppHash,
+		state.LastResultsHash,
 		proposerAddress,
 	)
 
@@ -353,3 +367,5 @@ func MakeGenesisState(genDoc *types.GenesisDoc) (State, error) {
 		AppHash: genDoc.AppHash,
 	}, nil
 }
+
+type decideBatchPointFunc func(l2BlockMeta tmbytes.HexBytes, txs types.Txs, blockHeight int64, blockTime time.Time) ([]byte, []byte)

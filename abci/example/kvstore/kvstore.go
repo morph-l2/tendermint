@@ -2,7 +2,6 @@ package kvstore
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 
@@ -121,30 +120,23 @@ func (app *Application) DeliverTx(req types.RequestDeliverTx) types.ResponseDeli
 	return types.ResponseDeliverTx{Code: code.CodeTypeOK, Events: events}
 }
 
-func (app *Application) CheckTx(req types.RequestCheckTx) types.ResponseCheckTx {
-	if req.Type == types.CheckTxType_Recheck {
-		if _, ok := app.txToRemove[string(req.Tx)]; ok {
-			return types.ResponseCheckTx{Code: code.CodeTypeExecuted, GasWanted: 1}
-		}
-	}
-	return types.ResponseCheckTx{Code: code.CodeTypeOK, GasWanted: 1}
-}
-
 func (app *Application) Commit() types.ResponseCommit {
-	// Using a memdb - just return the big endian size of the db
-	appHash := make([]byte, 8)
-	binary.PutVarint(appHash, app.state.Size)
-	app.state.AppHash = appHash
-	app.state.Height++
+	// // Using a memdb - just return the big endian size of the db
+	// appHash := make([]byte, 8)
+	// binary.PutVarint(appHash, 0)
+	// app.state.AppHash = appHash
+	// app.state.Height++
 
-	// empty out the set of transactions to remove via rechecktx
-	saveState(app.state)
+	// // empty out the set of transactions to remove via rechecktx
+	// saveState(app.state)
 
-	resp := types.ResponseCommit{Data: appHash}
-	if app.RetainBlocks > 0 && app.state.Height >= app.RetainBlocks {
-		resp.RetainHeight = app.state.Height - app.RetainBlocks + 1
-	}
-	return resp
+	// resp := types.ResponseCommit{Data: appHash}
+	// if app.RetainBlocks > 0 && app.state.Height >= app.RetainBlocks {
+	// 	resp.RetainHeight = app.state.Height - app.RetainBlocks + 1
+	// }
+	// return resp
+
+	return types.ResponseCommit{}
 }
 
 // Returns an associated value or nil if missing.

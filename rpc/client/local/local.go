@@ -87,30 +87,6 @@ func (c *Local) ABCIQueryWithOptions(
 	return core.ABCIQuery(c.ctx, path, data, opts.Height, opts.Prove)
 }
 
-func (c *Local) BroadcastTxCommit(ctx context.Context, tx types.Tx) (*ctypes.ResultBroadcastTxCommit, error) {
-	return core.BroadcastTxCommit(c.ctx, tx)
-}
-
-func (c *Local) BroadcastTxAsync(ctx context.Context, tx types.Tx) (*ctypes.ResultBroadcastTx, error) {
-	return core.BroadcastTxAsync(c.ctx, tx)
-}
-
-func (c *Local) BroadcastTxSync(ctx context.Context, tx types.Tx) (*ctypes.ResultBroadcastTx, error) {
-	return core.BroadcastTxSync(c.ctx, tx)
-}
-
-func (c *Local) UnconfirmedTxs(ctx context.Context, limit *int) (*ctypes.ResultUnconfirmedTxs, error) {
-	return core.UnconfirmedTxs(c.ctx, limit)
-}
-
-func (c *Local) NumUnconfirmedTxs(ctx context.Context) (*ctypes.ResultUnconfirmedTxs, error) {
-	return core.NumUnconfirmedTxs(c.ctx)
-}
-
-func (c *Local) CheckTx(ctx context.Context, tx types.Tx) (*ctypes.ResultCheckTx, error) {
-	return core.CheckTx(c.ctx, tx)
-}
-
 func (c *Local) NetInfo(ctx context.Context) (*ctypes.ResultNetInfo, error) {
 	return core.NetInfo(c.ctx)
 }

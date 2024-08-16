@@ -1,16 +1,20 @@
 package state
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"time"
 
 	abci "github.com/tendermint/tendermint/abci/types"
+	cfg "github.com/tendermint/tendermint/config"
+	"github.com/tendermint/tendermint/crypto/ed25519"
 	cryptoenc "github.com/tendermint/tendermint/crypto/encoding"
+	"github.com/tendermint/tendermint/l2node"
 	"github.com/tendermint/tendermint/libs/fail"
 	"github.com/tendermint/tendermint/libs/log"
-	"github.com/tendermint/tendermint/mempool"
 	tmstate "github.com/tendermint/tendermint/proto/tendermint/state"
+	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/proxy"
 	"github.com/tendermint/tendermint/types"
 )
@@ -18,7 +22,7 @@ import (
 //-----------------------------------------------------------------------------
 // BlockExecutor handles block execution and state updates.
 // It exposes ApplyBlock(), which validates & executes the block, updates state w/ ABCI responses,
-// then commits and updates the mempool atomically, then saves state.
+// then commits and saves state.
 
 // BlockExecutor provides the context and accessories for properly executing a block.
 type BlockExecutor struct {
@@ -28,13 +32,15 @@ type BlockExecutor struct {
 	// execute the app against this
 	proxyApp proxy.AppConnConsensus
 
+	// execute l2 tx against this
+	l2Node l2node.L2Node
+
 	// events
 	eventBus types.BlockEventPublisher
 
-	// manage the mempool lock during commit
-	// and update both with block results after commit.
-	mempool mempool.Mempool
-	evpool  EvidencePool
+	notifier *l2node.Notifier
+
+	evpool EvidencePool
 
 	logger log.Logger
 
@@ -55,15 +61,17 @@ func NewBlockExecutor(
 	stateStore Store,
 	logger log.Logger,
 	proxyApp proxy.AppConnConsensus,
-	mempool mempool.Mempool,
+	l2Node l2node.L2Node,
+	notifier *l2node.Notifier,
 	evpool EvidencePool,
 	options ...BlockExecutorOption,
 ) *BlockExecutor {
 	res := &BlockExecutor{
 		store:    stateStore,
 		proxyApp: proxyApp,
+		l2Node:   l2Node,
 		eventBus: types.NopEventBus{},
-		mempool:  mempool,
+		notifier: notifier,
 		evpool:   evpool,
 		logger:   logger,
 		metrics:  NopMetrics(),
@@ -76,6 +84,10 @@ func NewBlockExecutor(
 	return res
 }
 
+func (blockExec *BlockExecutor) RequestBlockData(height int64, createEmptyBlocksInterval time.Duration) {
+	blockExec.notifier.RequestBlockData(height, createEmptyBlocksInterval)
+}
+
 func (blockExec *BlockExecutor) Store() Store {
 	return blockExec.store
 }
@@ -86,29 +98,56 @@ func (blockExec *BlockExecutor) SetEventBus(eventBus types.BlockEventPublisher) 
 	blockExec.eventBus = eventBus
 }
 
-// CreateProposalBlock calls state.MakeBlock with evidence from the evpool
-// and txs from the mempool. The max bytes must be big enough to fit the commit.
+// CreateProposalBlock calls state.MakeBlock with evidence from the evpool.
+// The max bytes must be big enough to fit the commit.
 // Up to 1/10th of the block space is allcoated for maximum sized evidence.
 // The rest is given to txs, up to the max gas.
 //
 // Contract: application will not return more bytes than are sent over the wire.
 func (blockExec *BlockExecutor) CreateProposalBlock(
+	l2Node l2node.L2Node,
+	config *cfg.ConsensusConfig,
 	height int64,
 	state State,
 	commit *types.Commit,
 	proposerAddr []byte,
-) (*types.Block, error) {
-
+	decideBatchPoint decideBatchPointFunc,
+) (
+	*types.Block, error,
+) {
 	maxBytes := state.ConsensusParams.Block.MaxBytes
-	maxGas := state.ConsensusParams.Block.MaxGas
+	// maxGas := state.ConsensusParams.Block.MaxGas
 
 	evidence, evSize := blockExec.evpool.PendingEvidence(state.ConsensusParams.Evidence.MaxBytes)
 
 	// Fetch a limited amount of valid txs
 	maxDataBytes := types.MaxDataBytes(maxBytes, evSize, state.Validators.Size())
 
-	txs := blockExec.mempool.ReapMaxBytesMaxGas(maxDataBytes, maxGas)
-	block := state.MakeBlock(height, txs, commit, evidence, proposerAddr)
+	var txs [][]byte
+	var blockMeta []byte
+	var err error
+	if config.WaitForTxs() {
+		blockData := blockExec.notifier.WaitForBlockData()
+		if blockData != nil && blockData.Height == height {
+			txs = blockData.Txs
+			blockMeta = blockData.Meta
+		} else {
+			txs, blockMeta, _, err = l2Node.RequestBlockData(height)
+			if err != nil {
+				// return nil, err
+				panic(err)
+			}
+		}
+		blockExec.notifier.CleanBlockData()
+	} else {
+		txs, blockMeta, _, err = l2Node.RequestBlockData(height)
+		if err != nil {
+			// return nil, err
+			panic(err)
+		}
+	}
+
+	block := state.MakeBlock(height, l2node.ConvertBytesToTxs(txs), blockMeta, commit, evidence, proposerAddr, nil) // set 'decideBatchPoint' to nil here to prevent duplicated execution.
 
 	localLastCommit := buildLastCommitInfo(block, blockExec.store, state.InitialHeight)
 	rpp, err := blockExec.proxyApp.PrepareProposalSync(
@@ -124,10 +163,6 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 		},
 	)
 	if err != nil {
-		// The App MUST ensure that only valid (and hence 'processable') transactions
-		// enter the mempool. Hence, at this point, we can't have any non-processable
-		// transaction causing an error.
-		//
 		// Also, the App can simply skip any transaction that could cause any kind of trouble.
 		// Either way, we cannot recover in a meaningful way, unless we skip proposing
 		// this block, repair what caused the error and try again. Hence, we return an
@@ -140,7 +175,7 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 		return nil, err
 	}
 
-	return state.MakeBlock(height, txl, commit, evidence, proposerAddr), nil
+	return state.MakeBlock(height, txl, blockMeta, commit, evidence, proposerAddr, decideBatchPoint), nil
 }
 
 func (blockExec *BlockExecutor) ProcessProposal(
@@ -172,8 +207,7 @@ func (blockExec *BlockExecutor) ProcessProposal(
 // Validation does not mutate state, but does require historical information from the stateDB,
 // ie. to verify evidence from a validator at an old height.
 func (blockExec *BlockExecutor) ValidateBlock(state State, block *types.Block) error {
-	err := validateBlock(state, block)
-	if err != nil {
+	if err := validateBlock(state, block); err != nil {
 		return err
 	}
 	return blockExec.evpool.CheckEvidence(block.Evidence.Evidence)
@@ -186,59 +220,51 @@ func (blockExec *BlockExecutor) ValidateBlock(state State, block *types.Block) e
 // from outside this package to process and commit an entire block.
 // It takes a blockID to avoid recomputing the parts hash.
 func (blockExec *BlockExecutor) ApplyBlock(
-	state State, blockID types.BlockID, block *types.Block,
-) (State, int64, error) {
-
-	if err := validateBlock(state, block); err != nil {
+	state State,
+	blockID types.BlockID,
+	block *types.Block,
+	commit *types.Commit,
+) (
+	State, int64, error,
+) {
+	err := validateBlock(state, block)
+	if err != nil {
 		return state, 0, ErrInvalidBlock(err)
 	}
 
-	startTime := time.Now().UnixNano()
-	abciResponses, err := execBlockOnProxyApp(
-		blockExec.logger, blockExec.proxyApp, block, blockExec.store, state.InitialHeight,
-	)
-	endTime := time.Now().UnixNano()
-	blockExec.metrics.BlockProcessingTime.Observe(float64(endTime-startTime) / 1000000)
-	if err != nil {
-		return state, 0, ErrProxyAppConn(err)
+	// deliver blocks at execution layer
+	var consensusParamUpdates *tmproto.ConsensusParams
+	var validatorUpdates []*types.Validator
+
+	nextValidators := state.NextValidators.GetPubKeyBytesList()
+	if blockExec.l2Node != nil {
+		startTime := time.Now().UnixNano()
+		nextBatchParams, nextValidatorSet, err := ExecBlockOnL2Node(blockExec.logger, blockExec.l2Node, block, state.Validators, commit)
+		endTime := time.Now().UnixNano()
+		blockExec.metrics.BlockProcessingTime.Observe(float64(endTime-startTime) / 1000000)
+		if err != nil {
+			return state, 0, err
+		}
+
+		consensusParamUpdates = blockExec.GetConsensusParamsUpdate(nextBatchParams, nil, nil, nil, nil)
+		validatorUpdates = blockExec.GetValidatorUpdates(nextValidatorSet, nextValidators)
 	}
 
-	fail.Fail() // XXX
-
-	// Save the results before we commit.
-	if err := blockExec.store.SaveABCIResponses(block.Height, abciResponses); err != nil {
-		return state, 0, err
-	}
-
-	fail.Fail() // XXX
-
-	// validate the validator updates and convert to tendermint types
-	abciValUpdates := abciResponses.EndBlock.ValidatorUpdates
-	err = validateValidatorUpdates(abciValUpdates, state.ConsensusParams.Validator)
-	if err != nil {
-		return state, 0, fmt.Errorf("error in validator updates: %v", err)
-	}
-
-	validatorUpdates, err := types.PB2TM.ValidatorUpdates(abciValUpdates)
-	if err != nil {
-		return state, 0, err
-	}
 	if len(validatorUpdates) > 0 {
 		blockExec.logger.Debug("updates to validators", "updates", types.ValidatorListString(validatorUpdates))
 		blockExec.metrics.ValidatorSetUpdates.Add(1)
 	}
-	if abciResponses.EndBlock.ConsensusParamUpdates != nil {
+	if consensusParamUpdates != nil {
 		blockExec.metrics.ConsensusParamUpdates.Add(1)
 	}
 
 	// Update the state with the block and responses.
-	state, err = updateState(state, blockID, &block.Header, abciResponses, validatorUpdates)
+	state, err = updateState(state, blockID, &block.Header, consensusParamUpdates, validatorUpdates)
 	if err != nil {
 		return state, 0, fmt.Errorf("commit failed for application: %v", err)
 	}
 
-	// Lock mempool, commit app state, update mempoool.
-	appHash, retainHeight, err := blockExec.Commit(state, block, abciResponses.DeliverTxs)
+	appHash, retainHeight, err := blockExec.Commit(state, block)
 	if err != nil {
 		return state, 0, fmt.Errorf("commit failed for application: %v", err)
 	}
@@ -258,33 +284,90 @@ func (blockExec *BlockExecutor) ApplyBlock(
 
 	// Events are fired after everything else.
 	// NOTE: if we crash between Commit and Save, events wont be fired during replay
-	fireEvents(blockExec.logger, blockExec.eventBus, block, abciResponses, validatorUpdates)
+	// fireEvents(blockExec.logger, blockExec.eventBus, block, abciResponses, validatorUpdates)
 
 	return state, retainHeight, nil
 }
 
-// Commit locks the mempool, runs the ABCI Commit message, and updates the
-// mempool.
+func (blockExec *BlockExecutor) GetConsensusParamsUpdate(
+	nextBatchParams *tmproto.BatchParams,
+	block *tmproto.BlockParams,
+	evidence *tmproto.EvidenceParams,
+	validator *tmproto.ValidatorParams,
+	version *tmproto.VersionParams,
+) *tmproto.ConsensusParams {
+	if nextBatchParams == nil && block == nil && evidence == nil && validator == nil && version == nil {
+		return nil
+	}
+	return &tmproto.ConsensusParams{
+		Batch:     nextBatchParams,
+		Block:     block,
+		Evidence:  evidence,
+		Validator: validator,
+		Version:   version,
+	}
+}
+
+func (blockExec *BlockExecutor) GetValidatorUpdates(
+	nextValidatorSet [][]byte,
+	validatorSet [][]byte,
+) (
+	validatorUpdates []*types.Validator,
+) {
+	// search new valdator
+	for _, nVal := range nextValidatorSet {
+		exist := false
+		for _, val := range validatorSet {
+			if bytes.Equal(nVal, val) {
+				exist = true
+				break
+			}
+		}
+		if !exist {
+			pubkey := ed25519.PubKey(nVal)
+			validatorUpdates = append(
+				validatorUpdates,
+				&types.Validator{
+					Address:          pubkey.Address(),
+					PubKey:           pubkey,
+					VotingPower:      1,
+					ProposerPriority: 0,
+				},
+			)
+		}
+	}
+	// search validator removed
+	for _, val := range validatorSet {
+		exist := false
+		for _, nVal := range nextValidatorSet {
+			if bytes.Equal(val, nVal) {
+				exist = true
+				break
+			}
+		}
+		if !exist {
+			pubkey := ed25519.PubKey(val)
+			validatorUpdates = append(
+				validatorUpdates,
+				&types.Validator{
+					Address:          pubkey.Address(),
+					PubKey:           pubkey,
+					VotingPower:      0,
+					ProposerPriority: 0,
+				},
+			)
+		}
+	}
+	return validatorUpdates
+}
+
 // It returns the result of calling abci.Commit (the AppHash) and the height to retain (if any).
-// The Mempool must be locked during commit and update because state is
-// typically reset on Commit and old txs must be replayed against committed
-// state before new txs are run in the mempool, lest they be invalid.
 func (blockExec *BlockExecutor) Commit(
 	state State,
 	block *types.Block,
-	deliverTxResponses []*abci.ResponseDeliverTx,
-) ([]byte, int64, error) {
-	blockExec.mempool.Lock()
-	defer blockExec.mempool.Unlock()
-
-	// while mempool is Locked, flush to ensure all async requests have completed
-	// in the ABCI app before Commit.
-	err := blockExec.mempool.FlushAppConn()
-	if err != nil {
-		blockExec.logger.Error("client error during mempool.FlushAppConn", "err", err)
-		return nil, 0, err
-	}
-
+) (
+	[]byte, int64, error,
+) {
 	// Commit block, get hash back
 	res, err := blockExec.proxyApp.CommitSync()
 	if err != nil {
@@ -300,20 +383,52 @@ func (blockExec *BlockExecutor) Commit(
 		"app_hash", fmt.Sprintf("%X", res.Data),
 	)
 
-	// Update mempool.
-	err = blockExec.mempool.Update(
-		block.Height,
-		block.Txs,
-		deliverTxResponses,
-		TxPreCheck(state),
-		TxPostCheck(state),
-	)
-
 	return res.Data, res.RetainHeight, err
 }
 
 //---------------------------------------------------------
 // Helper functions for executing blocks and updating state
+
+func ExecBlockOnL2Node(logger log.Logger, l2Node l2node.L2Node, block *types.Block, validatorSet *types.ValidatorSet, commit *types.Commit) (*tmproto.BatchParams, [][]byte, error) {
+	var validators [][]byte
+	if validatorSet != nil {
+		validators = validatorSet.GetPubKeyBytesList()
+	}
+
+	nextBatchParams, nextValidatorSet, err := l2Node.DeliverBlock(
+		l2node.ConvertTxsToBytes(block.Data.Txs),
+		block.L2BlockMeta,
+		l2node.ConsensusData{
+			ValidatorSet: validators,
+			BatchHash:    block.BatchHash,
+		},
+	)
+	if err != nil {
+		logger.Error("failed to deliver block", "err", err, "height", block.Height)
+		return nil, nil, err
+	}
+
+	// batch operation
+	if commit != nil {
+		blsDatas, err := l2node.GetBLSDatas(commit, validatorSet)
+		if err != nil {
+			panic(err)
+		}
+		if len(block.BatchHash) > 0 { // this is a batchPoint
+			if err = l2Node.CommitBatch(block.L2BlockMeta, block.Txs, blsDatas); err != nil {
+				logger.Error("failed to commit batch", "err", err, "height", block.Height)
+				return nil, nil, err
+			}
+		} else {
+			if err = l2Node.PackCurrentBlock(block.L2BlockMeta, block.Txs); err != nil {
+				logger.Error("failed to pack current block", "err", err, "height", block.Height)
+				return nil, nil, err
+			}
+		}
+	}
+
+	return nextBatchParams, nextValidatorSet, nil
+}
 
 // Executes block's transactions on proxyAppConn.
 // Returns a list of transaction results and updates to the validator set
@@ -449,8 +564,7 @@ func extendedCommitInfo(c abci.CommitInfo) abci.ExtendedCommitInfo {
 	}
 }
 
-func validateValidatorUpdates(abciUpdates []abci.ValidatorUpdate,
-	params types.ValidatorParams) error {
+func validateValidatorUpdates(abciUpdates []abci.ValidatorUpdate, params types.ValidatorParams) error {
 	for _, valUpdate := range abciUpdates {
 		if valUpdate.GetPower() < 0 {
 			return fmt.Errorf("voting power can't be negative %v", valUpdate)
@@ -479,19 +593,18 @@ func updateState(
 	state State,
 	blockID types.BlockID,
 	header *types.Header,
-	abciResponses *tmstate.ABCIResponses,
+	consensusParamUpdates *tmproto.ConsensusParams,
 	validatorUpdates []*types.Validator,
-) (State, error) {
-
+) (
+	State, error,
+) {
 	// Copy the valset so we can apply changes from EndBlock
 	// and update s.LastValidators and s.Validators.
 	nValSet := state.NextValidators.Copy()
 
-	// Update the validator set with the latest abciResponses.
 	lastHeightValsChanged := state.LastHeightValidatorsChanged
 	if len(validatorUpdates) > 0 {
-		err := nValSet.UpdateWithChangeSet(validatorUpdates)
-		if err != nil {
+		if err := nValSet.UpdateWithChangeSet(validatorUpdates); err != nil {
 			return state, fmt.Errorf("error changing validator set: %v", err)
 		}
 		// Change results from this height but only applies to the next next height.
@@ -501,12 +614,11 @@ func updateState(
 	// Update validator proposer priority and set state variables.
 	nValSet.IncrementProposerPriority(1)
 
-	// Update the params with the latest abciResponses.
 	nextParams := state.ConsensusParams
 	lastHeightParamsChanged := state.LastHeightConsensusParamsChanged
-	if abciResponses.EndBlock.ConsensusParamUpdates != nil {
+	if consensusParamUpdates != nil {
 		// NOTE: must not mutate s.ConsensusParams
-		nextParams = state.ConsensusParams.Update(abciResponses.EndBlock.ConsensusParamUpdates)
+		nextParams = state.ConsensusParams.Update(consensusParamUpdates)
 		err := nextParams.ValidateBasic()
 		if err != nil {
 			return state, fmt.Errorf("error updating consensus params: %v", err)
@@ -535,8 +647,8 @@ func updateState(
 		LastHeightValidatorsChanged:      lastHeightValsChanged,
 		ConsensusParams:                  nextParams,
 		LastHeightConsensusParamsChanged: lastHeightParamsChanged,
-		LastResultsHash:                  ABCIResponsesResultsHash(abciResponses),
-		AppHash:                          nil,
+		LastResultsHash:                  nil,
+		AppHash:                          state.AppHash,
 	}, nil
 }
 

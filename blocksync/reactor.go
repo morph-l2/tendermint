@@ -1,10 +1,13 @@
 package blocksync
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
 
+	"github.com/tendermint/tendermint/l2node"
 	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/p2p"
 	bcproto "github.com/tendermint/tendermint/proto/tendermint/blocksync"
@@ -48,6 +51,8 @@ func (e peerError) Error() string {
 type Reactor struct {
 	p2p.BaseReactor
 
+	l2Node l2node.L2Node
+
 	// immutable
 	initialState sm.State
 
@@ -61,12 +66,16 @@ type Reactor struct {
 }
 
 // NewReactor returns new reactor instance.
-func NewReactor(state sm.State, blockExec *sm.BlockExecutor, store *store.BlockStore,
-	blockSync bool) *Reactor {
+func NewReactor(
+	l2Node l2node.L2Node,
+	state sm.State,
+	blockExec *sm.BlockExecutor,
+	store *store.BlockStore,
+	blockSync bool,
+) *Reactor {
 
 	if state.LastBlockHeight != store.Height() {
-		panic(fmt.Sprintf("state (%v) and store (%v) height mismatch", state.LastBlockHeight,
-			store.Height()))
+		panic(fmt.Sprintf("state (%v) and store (%v) height mismatch", state.LastBlockHeight, store.Height()))
 	}
 
 	requestsCh := make(chan BlockRequest, maxTotalRequesters)
@@ -81,6 +90,7 @@ func NewReactor(state sm.State, blockExec *sm.BlockExecutor, store *store.BlockS
 	pool := NewBlockPool(startHeight, requestsCh, errorsCh)
 
 	bcR := &Reactor{
+		l2Node:       l2Node,
 		initialState: state,
 		blockExec:    blockExec,
 		store:        store,
@@ -290,7 +300,6 @@ func (bcR *Reactor) poolRoutine(stateSynced bool) {
 					bcR.Logger.Error("could not convert msg to proto", "err", err)
 					continue
 				}
-
 				queued := peer.TrySend(BlocksyncChannel, msgBytes)
 				if !queued {
 					bcR.Logger.Debug("Send queue is full, drop block request", "peer", peer.ID(), "height", request.Height)
@@ -304,7 +313,6 @@ func (bcR *Reactor) poolRoutine(stateSynced bool) {
 			case <-statusUpdateTicker.C:
 				// ask for status updates
 				go bcR.BroadcastStatusRequest() //nolint: errcheck
-
 			}
 		}
 	}()
@@ -315,8 +323,13 @@ FOR_LOOP:
 		case <-switchToConsensusTicker.C:
 			height, numPending, lenRequesters := bcR.pool.GetStatus()
 			outbound, inbound, _ := bcR.Switch.NumPeers()
-			bcR.Logger.Debug("Consensus ticker", "numPending", numPending, "total", lenRequesters,
-				"outbound", outbound, "inbound", inbound)
+			bcR.Logger.Debug(
+				"Consensus ticker",
+				"numPending", numPending,
+				"total", lenRequesters,
+				"outbound", outbound,
+				"inbound", inbound,
+			)
 			if bcR.pool.IsCaughtUp() {
 				bcR.Logger.Info("Time to switch to consensus reactor!", "height", height)
 				if err := bcR.pool.Stop(); err != nil {
@@ -361,23 +374,69 @@ FOR_LOOP:
 
 			firstParts, err := first.MakePartSet(types.BlockPartSizeBytes)
 			if err != nil {
-				bcR.Logger.Error("failed to make ",
+				bcR.Logger.Error(
+					"failed to make ",
 					"height", first.Height,
-					"err", err.Error())
+					"err", err.Error(),
+				)
 				break FOR_LOOP
 			}
 			firstPartSetHeader := firstParts.Header()
-			firstID := types.BlockID{Hash: first.Hash(), PartSetHeader: firstPartSetHeader}
+			firstID := types.BlockID{Hash: first.Hash(), BatchHash: first.BatchHash, PartSetHeader: firstPartSetHeader}
 			// Finally, verify the first block using the second's commit
 			// NOTE: we can probably make this more efficient, but note that calling
 			// first.Hash() doesn't verify the tx contents, so MakePartSet() is
 			// currently necessary.
-			err = state.Validators.VerifyCommitLight(
-				chainID, firstID, first.Height, second.LastCommit)
-
-			if err == nil {
+			if err = state.Validators.VerifyCommitLight(chainID, firstID, first.Height, second.LastCommit); err == nil {
 				// validate the block before we persist it
 				err = bcR.blockExec.ValidateBlock(state, first)
+			}
+
+			// make sure the block has valid batchHash and batchHeader, and has the enough valid BLS signatures if it is a batch point
+			if err == nil {
+				err = func() error {
+					// check the correctness of the relation of batchHash and batchHeader
+					if len(first.L2BatchHeader) > 0 {
+						batchHash, hashErr := bcR.l2Node.BatchHash(first.L2BatchHeader)
+						if hashErr != nil {
+							return hashErr
+						}
+						if !bytes.Equal(first.BatchHash, batchHash) {
+							return fmt.Errorf("wrong batchHash. expectedHash: %x, actualHash: %x, batchHeader: %x", batchHash, first.BatchHash, first.L2BatchHeader)
+						}
+					} else if len(first.BatchHash) > 0 {
+						return errors.New("batch hash can not exist when batchHeader is empty")
+					}
+
+					blsDatas, err := l2node.GetBLSDatas(second.LastCommit, state.Validators)
+					if err != nil {
+						return err
+					}
+					var validVotingPowers int64
+					if len(blsDatas) > 0 {
+						if len(first.BatchHash) == 0 {
+							return errors.New("should not have bls signatures when batchHash is empty")
+						}
+						for _, blsData := range blsDatas {
+							// todo currently can not ensure the l2node has the corresponding bls public key of the signer
+							//valid, err := bcR.l2Node.VerifySignature(blsData.Signer, first.BatchHash, blsData.Signature)
+							//if err != nil {
+							//	return err
+							//}
+							//if valid {
+							//	validVotingPowers += blsData.VotingPower
+							//}
+							validVotingPowers += blsData.VotingPower
+						}
+						quorum := state.Validators.TotalVotingPower()*2/3 + 1
+						if validVotingPowers < quorum {
+							return fmt.Errorf("not enough votingPowers of valid bls signature. quorum: %d, valid votingPower: %d", quorum, validVotingPowers)
+						}
+					} else if len(first.BatchHash) > 0 {
+						return errors.New("must have bls signatures when batchHash is not empty")
+					}
+					return nil
+				}()
 			}
 
 			if err != nil {
@@ -406,17 +465,27 @@ FOR_LOOP:
 
 			// TODO: same thing for app - but we would need a way to
 			// get the hash without persisting the state
-			state, _, err = bcR.blockExec.ApplyBlock(state, firstID, first)
+			state, _, err = bcR.blockExec.ApplyBlock(
+				state,
+				firstID,
+				first,
+				nil,
+			)
 			if err != nil {
 				// TODO This is bad, are we zombie?
 				panic(fmt.Sprintf("Failed to process committed block (%d:%X): %v", first.Height, first.Hash(), err))
 			}
+
 			blocksSynced++
 
 			if blocksSynced%100 == 0 {
 				lastRate = 0.9*lastRate + 0.1*(100/time.Since(lastHundred).Seconds())
-				bcR.Logger.Info("Block Sync Rate", "height", bcR.pool.height,
-					"max_peer_height", bcR.pool.MaxPeerHeight(), "blocks/s", lastRate)
+				bcR.Logger.Info(
+					"Block Sync Rate",
+					"height", bcR.pool.height,
+					"max_peer_height", bcR.pool.MaxPeerHeight(),
+					"blocks/s", lastRate,
+				)
 				lastHundred = time.Now()
 			}
 

@@ -32,8 +32,7 @@ const (
 
 // ErrTotalVotingPowerOverflow is returned if the total voting power of the
 // resulting validator set exceeds MaxTotalVotingPower.
-var ErrTotalVotingPowerOverflow = fmt.Errorf("total voting power of resulting valset exceeds max %d",
-	MaxTotalVotingPower)
+var ErrTotalVotingPowerOverflow = fmt.Errorf("total voting power of resulting valset exceeds max %d", MaxTotalVotingPower)
 
 // ValidatorSet represent a set of *Validator at a given height.
 //
@@ -69,8 +68,7 @@ type ValidatorSet struct {
 // validation.
 func NewValidatorSet(valz []*Validator) *ValidatorSet {
 	vals := &ValidatorSet{}
-	err := vals.updateWithChangeSet(valz, false)
-	if err != nil {
+	if err := vals.updateWithChangeSet(valz, false); err != nil {
 		panic(fmt.Sprintf("Cannot create validator set: %v", err))
 	}
 	if len(valz) > 0 {
@@ -254,8 +252,7 @@ func (vals *ValidatorSet) Copy() *ValidatorSet {
 	}
 }
 
-// HasAddress returns true if address given is in the validator set, false -
-// otherwise.
+// HasAddress returns true if address given is in the validator set, false - otherwise.
 func (vals *ValidatorSet) HasAddress(address []byte) bool {
 	for _, val := range vals.Validators {
 		if bytes.Equal(val.Address, address) {
@@ -288,6 +285,13 @@ func (vals *ValidatorSet) GetByIndex(index int32) (address []byte, val *Validato
 	return val.Address, val.Copy()
 }
 
+func (vals *ValidatorSet) GetPubKeyBytesList() (pkBytesList [][]byte) {
+	for _, val := range vals.Validators {
+		pkBytesList = append(pkBytesList, val.PubKey.Bytes())
+	}
+	return
+}
+
 // Size returns the length of the validator set.
 func (vals *ValidatorSet) Size() int {
 	return len(vals.Validators)
@@ -303,8 +307,8 @@ func (vals *ValidatorSet) updateTotalVotingPower() {
 		if sum > MaxTotalVotingPower {
 			panic(fmt.Sprintf(
 				"Total voting power should be guarded to not exceed %v; got: %v",
-				MaxTotalVotingPower,
-				sum))
+				MaxTotalVotingPower, sum,
+			))
 		}
 	}
 
@@ -391,8 +395,10 @@ func processChanges(origChanges []*Validator) (updates, removals []*Validator, e
 			err = fmt.Errorf("voting power can't be negative: %d", valUpdate.VotingPower)
 			return nil, nil, err
 		case valUpdate.VotingPower > MaxTotalVotingPower:
-			err = fmt.Errorf("to prevent clipping/overflow, voting power can't be higher than %d, got %d",
-				MaxTotalVotingPower, valUpdate.VotingPower)
+			err = fmt.Errorf(
+				"to prevent clipping/overflow, voting power can't be higher than %d, got %d",
+				MaxTotalVotingPower, valUpdate.VotingPower,
+			)
 			return nil, nil, err
 		case valUpdate.VotingPower == 0:
 			removals = append(removals, valUpdate)
@@ -428,7 +434,10 @@ func verifyUpdates(
 	updates []*Validator,
 	vals *ValidatorSet,
 	removedPower int64,
-) (tvpAfterUpdatesBeforeRemovals int64, err error) {
+) (
+	tvpAfterUpdatesBeforeRemovals int64,
+	err error,
+) {
 
 	delta := func(update *Validator, vals *ValidatorSet) int64 {
 		_, val := vals.GetByAddress(update.Address)
@@ -664,8 +673,7 @@ func (vals *ValidatorSet) UpdateWithChangeSet(changes []*Validator) error {
 // application that depends on the LastCommitInfo sent in BeginBlock, which
 // includes which validators signed. For instance, Gaia incentivizes proposers
 // with a bonus for including more than +2/3 of the signatures.
-func (vals *ValidatorSet) VerifyCommit(chainID string, blockID BlockID,
-	height int64, commit *Commit) error {
+func (vals *ValidatorSet) VerifyCommit(chainID string, blockID BlockID, height int64, commit *Commit) error {
 
 	if vals.Size() != len(commit.Signatures) {
 		return NewErrInvalidCommitSignatures(vals.Size(), len(commit.Signatures))
@@ -719,8 +727,7 @@ func (vals *ValidatorSet) VerifyCommit(chainID string, blockID BlockID,
 //
 // This method is primarily used by the light client and does not check all the
 // signatures.
-func (vals *ValidatorSet) VerifyCommitLight(chainID string, blockID BlockID,
-	height int64, commit *Commit) error {
+func (vals *ValidatorSet) VerifyCommitLight(chainID string, blockID BlockID, height int64, commit *Commit) error {
 
 	if vals.Size() != len(commit.Signatures) {
 		return NewErrInvalidCommitSignatures(vals.Size(), len(commit.Signatures))
@@ -891,7 +898,8 @@ func (vals *ValidatorSet) StringIndented(indent string) string {
 		indent, vals.GetProposer().String(),
 		indent,
 		indent, strings.Join(valStrings, "\n"+indent+"    "),
-		indent)
+		indent,
+	)
 
 }
 
