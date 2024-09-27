@@ -68,7 +68,6 @@ type Batcher interface {
 		get GetFromBatchStartFunc,
 	) (
 		sizeExceeded bool,
-		chunkNum int64,
 		err error,
 	)
 

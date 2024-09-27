@@ -162,16 +162,15 @@ func (l *MockL2Node) CalculateCapWithProposalBlock(
 	get GetFromBatchStartFunc,
 ) (
 	sizeExceeded bool,
-	chunkNum int64,
 	err error,
 ) {
 	if len(proposalBlockBytes) < 8 {
-		return false, 0, errors.New("empty block bytes")
+		return false, errors.New("empty block bytes")
 	}
 	if len(l.encodingBatch) == 0 {
 		parentBatchHeader, blockMetas, transactions, err := get()
 		if err != nil {
-			return false, 0, err
+			return false, err
 		}
 		if len(parentBatchHeader) == 0 {
 			l.parentBatchHeader = l.genesisParentBatchHeader
@@ -190,7 +189,7 @@ func (l *MockL2Node) CalculateCapWithProposalBlock(
 	for _, tx := range proposalTxs {
 		l.currentBlockWithTxsBytes = append(l.currentBlockWithTxsBytes, tx...)
 	}
-	return len(l.encodingBatch)+len(l.currentBlockWithTxsBytes) > 1024, 0, err
+	return len(l.encodingBatch)+len(l.currentBlockWithTxsBytes) > 1024, err
 }
 
 func (l *MockL2Node) SealBatch() ([]byte, []byte, error) {
