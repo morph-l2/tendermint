@@ -134,16 +134,14 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 		} else {
 			txs, blockMeta, _, err = l2Node.RequestBlockData(height)
 			if err != nil {
-				// return nil, err
-				panic(err)
+				return nil, err
 			}
 		}
 		blockExec.notifier.CleanBlockData()
 	} else {
 		txs, blockMeta, _, err = l2Node.RequestBlockData(height)
 		if err != nil {
-			// return nil, err
-			panic(err)
+			return nil, err
 		}
 	}
 

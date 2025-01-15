@@ -53,16 +53,19 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 						Txs:    txs,
 						Meta:   metaData,
 					}
-					n.txsAvailable <- struct{}{}
+					select {
+					case n.txsAvailable <- struct{}{}:
+					default:
+					}
 					return
 				}
 				time.Sleep(500 * time.Millisecond)
 			}
 		}()
 	} else {
-		timeout := time.After(createEmptyBlocksInterval)
 		go func() {
 			defer n.wg.Done()
+			timeout := time.After(createEmptyBlocksInterval)
 			for {
 				select {
 				case <-timeout:
@@ -79,7 +82,10 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 							Txs:    txs,
 							Meta:   metaData,
 						}
-						n.txsAvailable <- struct{}{}
+						select {
+						case n.txsAvailable <- struct{}{}:
+						default:
+						}
 						return
 					}
 				}
