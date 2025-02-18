@@ -1263,6 +1263,11 @@ func (n *Node) BlockStore() *store.BlockStore {
 	return n.blockStore
 }
 
+// StateStore returns the Node's StateStore.
+func (n *Node) StateStore() sm.Store {
+	return n.stateStore
+}
+
 // ConsensusState returns the Node's ConsensusState.
 func (n *Node) ConsensusState() *cs.State {
 	return n.consensusState
