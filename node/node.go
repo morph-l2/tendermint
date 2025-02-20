@@ -241,6 +241,7 @@ type Node struct {
 	blockIndexer      indexer.BlockIndexer
 	indexerService    *txindex.IndexerService
 	prometheusSrv     *http.Server
+	l2Node            l2node.L2Node
 }
 
 func initDBs(config *cfg.Config, dbProvider DBProvider) (blockStore *store.BlockStore, stateDB dbm.DB, err error) {
@@ -942,6 +943,7 @@ func NewNode(
 		indexerService:   indexerService,
 		blockIndexer:     blockIndexer,
 		eventBus:         eventBus,
+		l2Node:           l2Node,
 	}
 	node.BaseService = *service.NewBaseService(logger, "Node", node)
 
@@ -1094,6 +1096,7 @@ func (n *Node) ConfigureRPC() error {
 		ConsensusState: n.consensusState,
 		P2PPeers:       n.sw,
 		P2PTransport:   n,
+		L2Node:         n.l2Node,
 
 		PubKey:           pubKey,
 		GenDoc:           n.genesisDoc,
