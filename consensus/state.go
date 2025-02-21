@@ -1283,7 +1283,7 @@ func (cs *State) createProposalBlock() (*types.Block, error) {
 			return cs.decideBatchPoint(l2BlockMeta, txs, blockHeight, blockTime)
 		})
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	cs.setTrustBatchData(ret.Hash(), ret.BatchHash, ret.L2BatchHeader)
