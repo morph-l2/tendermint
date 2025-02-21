@@ -40,6 +40,9 @@ var Routes = map[string]*rpc.RPCFunc{
 
 	// evidence API
 	"broadcast_evidence": rpc.NewRPCFunc(BroadcastEvidence, "evidence"),
+
+	// batch API
+	"batch_by_index": rpc.NewRPCFunc(env.L2Node.BatchByIndex, "index"),
 }
 
 // AddUnsafeRoutes adds unsafe routes.

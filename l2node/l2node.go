@@ -3,6 +3,7 @@ package l2node
 import (
 	"fmt"
 
+	eth "github.com/morph-l2/go-ethereum/core/types"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/types"
 )
@@ -91,6 +92,8 @@ type Batcher interface {
 	AppendBlsData(height int64, batchHash []byte, data BlsData) error
 
 	BatchHash(batchHeader []byte) ([]byte, error)
+
+	BatchByIndex(index uint64) (*eth.RollupBatch, []*eth.BatchSignature, error)
 }
 type GetFromBatchStartFunc func() (
 	parentBatchHeader []byte,

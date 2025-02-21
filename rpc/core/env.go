@@ -8,6 +8,7 @@ import (
 	cfg "github.com/tendermint/tendermint/config"
 	"github.com/tendermint/tendermint/consensus"
 	"github.com/tendermint/tendermint/crypto"
+	"github.com/tendermint/tendermint/l2node"
 	tmjson "github.com/tendermint/tendermint/libs/json"
 	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/p2p"
@@ -82,6 +83,7 @@ type Environment struct {
 	ConsensusState Consensus
 	P2PPeers       peers
 	P2PTransport   transport
+	L2Node         l2node.L2Node
 
 	// objects
 	PubKey           crypto.PubKey
