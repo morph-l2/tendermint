@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tendermint/tendermint/crypto"
 	"github.com/tendermint/tendermint/libs/log"
 )
 
@@ -17,16 +18,18 @@ type Notifier struct {
 	txsAvailable chan struct{}
 	blockData    *BlockData
 	l2Node       L2Node
+	pubKey       crypto.PubKey
 
 	wg     sync.WaitGroup
 	logger log.Logger
 }
 
-func NewNotifier(l2Node L2Node, logger log.Logger) *Notifier {
+func NewNotifier(l2Node L2Node, logger log.Logger, pubKey crypto.PubKey) *Notifier {
 	return &Notifier{
 		txsAvailable: make(chan struct{}, 1),
 		blockData:    nil,
 		l2Node:       l2Node,
+		pubKey:       pubKey,
 		wg:           sync.WaitGroup{},
 		logger:       logger,
 	}
@@ -42,7 +45,7 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 		go func() {
 			defer n.wg.Done()
 			for {
-				txs, metaData, collectedL1Msgs, err := n.l2Node.RequestBlockData(height)
+				txs, metaData, collectedL1Msgs, err := n.l2Node.RequestBlockData(height, n.pubKey.Bytes())
 				if err != nil {
 					n.logger.Error("failed to call l2Node.RequestBlockData", "err", err)
 					return
@@ -71,7 +74,7 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 				case <-timeout:
 					return
 				default:
-					txs, metaData, collectedL1Msgs, err := n.l2Node.RequestBlockData(height)
+					txs, metaData, collectedL1Msgs, err := n.l2Node.RequestBlockData(height, n.pubKey.Bytes())
 					if err != nil {
 						n.logger.Error("failed to call l2Node.RequestBlockData", "err", err)
 						return

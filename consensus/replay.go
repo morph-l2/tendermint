@@ -493,7 +493,7 @@ func (h *Handshaker) replayBlock(state sm.State, height int64, proxyApp proxy.Ap
 	meta := h.store.LoadBlockMeta(height)
 
 	// Use stubs for evidence pool since no transactions nor evidence are needed here - block already exists.
-	blockExec := sm.NewBlockExecutor(h.stateStore, h.logger, proxyApp, l2Node, &l2node.Notifier{}, sm.EmptyEvidencePool{})
+	blockExec := sm.NewBlockExecutor(h.stateStore, h.logger, proxyApp, l2Node, &l2node.Notifier{}, sm.EmptyEvidencePool{}, nil)
 	blockExec.SetEventBus(h.eventBus)
 
 	var err error

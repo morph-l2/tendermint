@@ -8,6 +8,7 @@ import (
 
 	abci "github.com/tendermint/tendermint/abci/types"
 	cfg "github.com/tendermint/tendermint/config"
+	"github.com/tendermint/tendermint/crypto"
 	"github.com/tendermint/tendermint/crypto/ed25519"
 	cryptoenc "github.com/tendermint/tendermint/crypto/encoding"
 	"github.com/tendermint/tendermint/l2node"
@@ -42,6 +43,8 @@ type BlockExecutor struct {
 
 	evpool EvidencePool
 
+	pubKey crypto.PubKey
+
 	logger log.Logger
 
 	metrics *Metrics
@@ -64,6 +67,7 @@ func NewBlockExecutor(
 	l2Node l2node.L2Node,
 	notifier *l2node.Notifier,
 	evpool EvidencePool,
+	pubKey crypto.PubKey,
 	options ...BlockExecutorOption,
 ) *BlockExecutor {
 	res := &BlockExecutor{
@@ -73,6 +77,7 @@ func NewBlockExecutor(
 		eventBus: types.NopEventBus{},
 		notifier: notifier,
 		evpool:   evpool,
+		pubKey:   pubKey,
 		logger:   logger,
 		metrics:  NopMetrics(),
 	}
@@ -132,14 +137,14 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 			txs = blockData.Txs
 			blockMeta = blockData.Meta
 		} else {
-			txs, blockMeta, _, err = l2Node.RequestBlockData(height)
+			txs, blockMeta, _, err = l2Node.RequestBlockData(height, blockExec.pubKey.Bytes())
 			if err != nil {
 				return nil, err
 			}
 		}
 		blockExec.notifier.CleanBlockData()
 	} else {
-		txs, blockMeta, _, err = l2Node.RequestBlockData(height)
+		txs, blockMeta, _, err = l2Node.RequestBlockData(height, blockExec.pubKey.Bytes())
 		if err != nil {
 			return nil, err
 		}

@@ -339,7 +339,7 @@ func newConsensusStateForReplay(config cfg.BaseConfig, csConfig *cfg.ConsensusCo
 
 	notifier, evpool := &l2node.Notifier{}, sm.EmptyEvidencePool{}
 
-	blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyApp.Consensus(), nil, notifier, evpool)
+	blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyApp.Consensus(), nil, notifier, evpool, nil)
 
 	consensusState := NewState(
 		nil, // TODO

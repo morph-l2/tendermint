@@ -25,6 +25,7 @@ type L2Node interface {
 
 	RequestBlockData(
 		height int64,
+		publicKey []byte,
 	) (
 		txs [][]byte,
 		blockMeta []byte,

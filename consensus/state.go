@@ -1066,6 +1066,7 @@ func (cs *State) enterNewRound(height int64, round int32) {
 	if waitForTxs {
 		if cs.isProposer(cs.privValidatorPubKey.Address()) {
 			cs.blockExec.RequestBlockData(height, cs.config.CreateEmptyBlocksInterval)
+			cs.privValidatorPubKey.Bytes()
 		}
 		if cs.config.CreateEmptyBlocksInterval > 0 {
 			cs.scheduleTimeout(cs.config.CreateEmptyBlocksInterval, height, round, cstypes.RoundStepNewRound)

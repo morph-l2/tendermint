@@ -77,6 +77,7 @@ func heightFromBytes(bz []byte) int64 {
 
 func (l *MockL2Node) RequestBlockData(
 	height int64,
+	publicKey []byte,
 ) (
 	txs [][]byte,
 	meta []byte,
