@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 
+	ethtypes "github.com/morph-l2/go-ethereum/core/types"
+
 	"github.com/tendermint/tendermint/crypto/tmhash"
 	tmjson "github.com/tendermint/tendermint/libs/json"
 	tmos "github.com/tendermint/tendermint/libs/os"
@@ -243,4 +245,8 @@ func (l *MockL2Node) AppendBlsData(height int64, batchHash []byte, data BlsData)
 
 func (l *MockL2Node) BatchHash(batchHeader []byte) ([]byte, error) {
 	return tmhash.Sum(batchHeader), nil
+}
+
+func (l *MockL2Node) BatchByIndex(index uint64) (*ethtypes.RollupBatch, []*ethtypes.BatchSignature, error) {
+	return nil, nil, fmt.Errorf("not implemented")
 }
