@@ -376,7 +376,8 @@ func logNodeStartupInfo(state sm.State, pubKey crypto.PubKey, logger, consensusL
 
 	addr := pubKey.Address()
 	// Log whether this node is a validator or an observer
-	if state.Validators.HasAddress(addr) {
+	// Add nil check to prevent panic when state.Validators is nil
+	if state.Validators != nil && state.Validators.HasAddress(addr) {
 		consensusLogger.Info("This node is a validator", "addr", addr, "pubKey", pubKey)
 	} else {
 		consensusLogger.Info("This node is not a validator", "addr", addr, "pubKey", pubKey)
@@ -384,6 +385,10 @@ func logNodeStartupInfo(state sm.State, pubKey crypto.PubKey, logger, consensusL
 }
 
 func onlyValidatorIsUs(state sm.State, pubKey crypto.PubKey) bool {
+	// Add nil check to prevent panic when state.Validators is nil
+	if state.Validators == nil || state.Validators.Size() == 0 {
+		return false
+	}
 	if state.Validators.Size() > 1 {
 		return false
 	}
@@ -800,7 +805,9 @@ func NewNode(
 		// Reload the state. It will have the Version.Consensus.App set by the
 		// Handshake, and may have other modifications as well (ie. depending on
 		// what happened during block replay).
-		state, err = stateStore.Load()
+		// Use LoadFromDBOrGenesisDoc instead of Load to handle empty state.db case
+		// (e.g., when syncing from genesis with a fresh node-data directory).
+		state, err = stateStore.LoadFromDBOrGenesisDoc(genDoc)
 		if err != nil {
 			return nil, fmt.Errorf("cannot load state: %w", err)
 		}
