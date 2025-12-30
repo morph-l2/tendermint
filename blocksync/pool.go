@@ -186,11 +186,29 @@ func (pool *BlockPool) IsCaughtUp() bool {
 	return isCaughtUp
 }
 
+// MaxPeerHeight returns the highest height reported by any peer.
+func (pool *BlockPool) MaxPeerHeight() int64 {
+	pool.mtx.Lock()
+	defer pool.mtx.Unlock()
+	return pool.maxPeerHeight
+}
+
+// GetPeerHeight returns the height of a specific peer.
+// Returns 0 if peer is not found.
+func (pool *BlockPool) GetPeerHeight(peerID p2p.ID) int64 {
+	pool.mtx.Lock()
+	defer pool.mtx.Unlock()
+	if peer, ok := pool.peers[peerID]; ok {
+		return peer.height
+	}
+	return 0
+}
+
 // PeekTwoBlocks returns blocks at pool.height and pool.height+1.
 // We need to see the second block's Commit to validate the first block.
 // So we peek two blocks at a time.
 // The caller will verify the commit.
-func (pool *BlockPool) PeekTwoBlocks() (first *types.Block, second *types.Block) {
+func (pool *BlockPool) PeekTwoBlocks() (first, second types.SyncableBlock) {
 	pool.mtx.Lock()
 	defer pool.mtx.Unlock()
 
@@ -242,12 +260,15 @@ func (pool *BlockPool) RedoRequest(height int64) p2p.ID {
 }
 
 // AddBlock validates that the block comes from the peer it was expected from and calls the requester to store it.
+// AddBlock adds a block (either Block or BlockV2) to the pool.
+// Uses SyncableBlock interface to handle both types uniformly.
 // TODO: ensure that blocks come in order for each peer.
-func (pool *BlockPool) AddBlock(peerID p2p.ID, block *types.Block, blockSize int) {
+func (pool *BlockPool) AddBlock(peerID p2p.ID, block types.SyncableBlock, blockSize int) {
 	pool.mtx.Lock()
 	defer pool.mtx.Unlock()
 
-	requester := pool.requesters[block.Height]
+	height := block.GetHeight()
+	requester := pool.requesters[height]
 	if requester == nil {
 		pool.Logger.Info(
 			"peer sent us a block we didn't expect",
@@ -256,8 +277,8 @@ func (pool *BlockPool) AddBlock(peerID p2p.ID, block *types.Block, blockSize int
 			"curHeight",
 			pool.height,
 			"blockHeight",
-			block.Height)
-		diff := pool.height - block.Height
+			height)
+		diff := pool.height - height
 		if diff < 0 {
 			diff *= -1
 		}
@@ -274,16 +295,20 @@ func (pool *BlockPool) AddBlock(peerID p2p.ID, block *types.Block, blockSize int
 			peer.decrPending(blockSize)
 		}
 	} else {
-		pool.Logger.Info("invalid peer", "peer", peerID, "blockHeight", block.Height)
+		pool.Logger.Info("invalid peer", "peer", peerID, "blockHeight", height)
 		pool.sendError(errors.New("invalid peer"), peerID)
 	}
 }
 
-// MaxPeerHeight returns the highest reported height.
-func (pool *BlockPool) MaxPeerHeight() int64 {
+// GetPeerIDs returns all peer IDs in the pool.
+func (pool *BlockPool) GetPeerIDs() []p2p.ID {
 	pool.mtx.Lock()
 	defer pool.mtx.Unlock()
-	return pool.maxPeerHeight
+	ids := make([]p2p.ID, 0, len(pool.peers))
+	for id := range pool.peers {
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 // SetPeerRange sets the peer's alleged blockchain base and height.
@@ -515,7 +540,7 @@ type bpRequester struct {
 
 	mtx    tmsync.Mutex
 	peerID p2p.ID
-	block  *types.Block
+	block  types.SyncableBlock // Supports both Block and BlockV2
 }
 
 func newBPRequester(pool *BlockPool, height int64) *bpRequester {
@@ -538,7 +563,7 @@ func (bpr *bpRequester) OnStart() error {
 }
 
 // Returns true if the peer matches and block doesn't already exist.
-func (bpr *bpRequester) setBlock(block *types.Block, peerID p2p.ID) bool {
+func (bpr *bpRequester) setBlock(block types.SyncableBlock, peerID p2p.ID) bool {
 	bpr.mtx.Lock()
 	if bpr.block != nil || bpr.peerID != peerID {
 		bpr.mtx.Unlock()
@@ -554,7 +579,7 @@ func (bpr *bpRequester) setBlock(block *types.Block, peerID p2p.ID) bool {
 	return true
 }
 
-func (bpr *bpRequester) getBlock() *types.Block {
+func (bpr *bpRequester) getBlock() types.SyncableBlock {
 	bpr.mtx.Lock()
 	defer bpr.mtx.Unlock()
 	return bpr.block
