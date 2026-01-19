@@ -59,7 +59,7 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 					}
 					return
 				}
-				time.Sleep(500 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 			}
 		}()
 	} else {
@@ -89,7 +89,7 @@ func (n *Notifier) RequestBlockData(height int64, createEmptyBlocksInterval time
 						return
 					}
 				}
-				time.Sleep(500 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 			}
 		}()
 	}
