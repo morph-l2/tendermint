@@ -3,12 +3,19 @@ package node
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
+
+	"github.com/tendermint/tendermint/upgrade"
+
+	ethcrypto "github.com/morph-l2/go-ethereum/crypto"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -36,6 +43,7 @@ import (
 	rpccore "github.com/tendermint/tendermint/rpc/core"
 	grpccore "github.com/tendermint/tendermint/rpc/grpc"
 	rpcserver "github.com/tendermint/tendermint/rpc/jsonrpc/server"
+	"github.com/tendermint/tendermint/sequencer"
 	sm "github.com/tendermint/tendermint/state"
 	"github.com/tendermint/tendermint/state/indexer"
 	blockidxkv "github.com/tendermint/tendermint/state/indexer/block/kv"
@@ -241,6 +249,11 @@ type Node struct {
 	blockIndexer      indexer.BlockIndexer
 	indexerService    *txindex.IndexerService
 	prometheusSrv     *http.Server
+
+	// Sequencer mode (after upgrade)
+	stateV2               *sequencer.StateV2
+	blockBroadcastReactor *sequencer.BlockBroadcastReactor
+	sequencerPrivKey      *ecdsa.PrivateKey // ECDSA key for signing blocks in sequencer mode
 }
 
 func initDBs(config *cfg.Config, dbProvider DBProvider) (blockStore *store.BlockStore, stateDB dbm.DB, err error) {
@@ -437,7 +450,7 @@ func createBlockchainReactor(
 ) {
 	switch config.BlockSync.Version {
 	case "v0":
-		bcReactor = bc.NewReactor(l2Node, state.Copy(), blockExec, blockStore, blockSync)
+		bcReactor = bc.NewReactor(l2Node, state.Copy(), blockExec, blockStore, blockSync, nil) // stateV2 set later via SetStateV2
 	case "v1", "v2":
 		return nil, fmt.Errorf("block sync version %s has been deprecated. Please use v0", config.BlockSync.Version)
 	default:
@@ -489,6 +502,38 @@ func createConsensusReactor(
 	// consensusReactor will set it on consensusState and blockExecutor
 	consensusReactor.SetEventBus(eventBus)
 	return consensusReactor, consensusState
+}
+
+// createSequencerComponents creates the sequencer mode components (StateV2 and BlockBroadcastReactor).
+// These components are created but not started - they will be started when switching to sequencer mode.
+func createSequencerComponents(
+	l2Node l2node.L2Node,
+	sequencerPrivKey *ecdsa.PrivateKey,
+	pool *bc.BlockPool,
+	waitSync bool,
+	logger log.Logger,
+) (*sequencer.StateV2, *sequencer.BlockBroadcastReactor, error) {
+	// Create StateV2
+	stateV2, err := sequencer.NewStateV2(
+		l2Node,
+		sequencerPrivKey,
+		sequencer.DefaultBlockInterval,
+		logger,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create StateV2: %w", err)
+	}
+
+	// Create BlockBroadcastReactor (not started yet)
+	broadcastReactor := sequencer.NewBlockBroadcastReactor(
+		pool,
+		stateV2,
+		waitSync,
+		logger,
+	)
+	broadcastReactor.SetLogger(logger.With("module", "sequencer"))
+
+	return stateV2, broadcastReactor, nil
 }
 
 func createTransport(
@@ -708,7 +753,20 @@ func startStateSync(
 				return
 			}
 		} else {
-			conR.SwitchToConsensus(state, true)
+			// Check if we should switch to sequencer mode instead of consensus
+			if upgrade.IsUpgraded(state.LastBlockHeight + 1) {
+				ssR.Logger.Info("State sync completed at upgrade height, switching to sequencer mode",
+					"height", state.LastBlockHeight)
+				if seqR, ok := bcR.(*bc.Reactor); ok {
+					if bbR, ok := seqR.Switch.Reactor("SEQUENCER").(interface{ StartSequencerRoutines() error }); ok {
+						if err := bbR.StartSequencerRoutines(); err != nil {
+							ssR.Logger.Error("Failed to start sequencer routines", "err", err)
+						}
+					}
+				}
+			} else {
+				conR.SwitchToConsensus(state, true)
+			}
 		}
 	}()
 	return nil
@@ -944,6 +1002,35 @@ func NewNode(
 		eventBus:         eventBus,
 	}
 	node.BaseService = *service.NewBaseService(logger, "Node", node)
+
+	// Initialize sequencer mode components (but don't start them)
+	if bcR, ok := bcReactor.(*bc.Reactor); ok {
+		l2NodeRef := bcR.L2Node()
+
+		// TODO: just for Phase1, will update in future
+		if err := node.SetSequencerPrivKey(); err != nil {
+			return nil, err
+		}
+		// Create sequencer components
+		if node.stateV2, node.blockBroadcastReactor, err = createSequencerComponents(
+			l2NodeRef,
+			node.sequencerPrivKey,
+			bcR.Pool(),
+			blockSync || stateSync,
+			logger); err != nil {
+			return nil, err
+		}
+
+		// Set stateV2 on blocksync reactor for post-upgrade sync
+		bcR.SetStateV2(node.stateV2)
+
+		// Register BlockBroadcastReactor with Switch
+		sw.AddReactor("SEQUENCER", node.blockBroadcastReactor)
+
+		// Set upgrade callback on consensus state
+		// This is called when PBFT reaches upgrade height during normal block production
+		consensusState.SetOnUpgrade(node.switchToSequencerMode)
+	}
 
 	for _, option := range options {
 		option(node)
@@ -1359,6 +1446,8 @@ func makeNodeInfo(
 			evidence.EvidenceChannel,
 			statesync.SnapshotChannel,
 			statesync.ChunkChannel,
+			sequencer.BlockBroadcastChannel,
+			sequencer.SequencerSyncChannel,
 		},
 		Moniker: config.Moniker,
 		Other: p2p.DefaultNodeInfoOther{
@@ -1502,4 +1591,62 @@ func splitAndTrimEmpty(s, sep, cutset string) []string {
 		}
 	}
 	return nonEmptyStrings
+}
+
+// ============================================================================
+// Sequencer Mode Methods
+// ============================================================================
+
+// TODO: optimize SetSequencerPrivKey in the future
+// SetSequencerPrivKey sets the ECDSA private key for signing blocks in sequencer mode.
+func (n *Node) SetSequencerPrivKey() error {
+	// Load sequencer private key from environment variable
+	if seqKeyHex := os.Getenv("SEQUENCER_PRIVATE_KEY"); seqKeyHex != "" {
+		seqKeyHex = strings.TrimPrefix(seqKeyHex, "0x")
+		keyBytes, err := hex.DecodeString(seqKeyHex)
+		if err != nil {
+			return fmt.Errorf("failed to decode SEQUENCER_PRIVATE_KEY: %w", err)
+		}
+		n.sequencerPrivKey, err = ethcrypto.ToECDSA(keyBytes)
+		if err != nil {
+			return fmt.Errorf("failed to parse SEQUENCER_PRIVATE_KEY: %w", err)
+		}
+		n.Logger.Info("Loaded sequencer private key",
+			"address", ethcrypto.PubkeyToAddress(n.sequencerPrivKey.PublicKey).Hex())
+	}
+	return nil
+}
+
+// startSequencerMode starts the sequencer mode components with logging.
+// This is an internal method used by upgrade callbacks and startup logic.
+func (n *Node) startSequencerMode() {
+	if n.blockBroadcastReactor == nil {
+		panic("blockBroadcastReactor is nil, cannot switch to sequencer mode")
+	}
+	n.Logger.Info("Starting broadcast reactor...")
+	if err := n.blockBroadcastReactor.StartSequencerRoutines(); err != nil {
+		panic(fmt.Errorf("failed to start sequencer routines: %w", err))
+	}
+	n.Logger.Info("Broadcast reactor started successfully")
+}
+
+func (n *Node) switchToSequencerMode() {
+	n.Logger.Info("Upgrade callback triggered, scheduling switch to sequencer mode")
+
+	// NOTE: Must use goroutine to avoid deadlock - onUpgrade is called from finalizeCommit,
+	// and consensusReactor.Stop() would try to stop the state that's currently running.
+	go func() {
+		// Wait a moment for finalizeCommit to complete
+		time.Sleep(100 * time.Millisecond)
+
+		// Stop consensus reactor
+		n.Logger.Info("Stopping consensus reactor...")
+		if err := n.consensusReactor.Stop(); err != nil {
+			n.Logger.Error("Failed to stop consensus reactor", "err", err)
+		}
+		n.Logger.Info("Consensus reactor stopped")
+
+		// Start broadcast reactor
+		n.startSequencerMode()
+	}()
 }

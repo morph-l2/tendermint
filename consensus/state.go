@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/tendermint/tendermint/upgrade"
 	"io"
 	"os"
 	"runtime/debug"
@@ -148,6 +149,10 @@ type State struct {
 	// synchronous pubsub between consensus state and reactor.
 	// state only emits EventNewRoundStep and EventVote
 	evsw tmevents.EventSwitch
+
+	// onUpgrade is called when reaching upgrade height (before stopping state)
+	// Used to notify reactor to switch to sequencer mode
+	onUpgrade func()
 
 	// for reporting metrics
 	metrics *Metrics
@@ -304,6 +309,15 @@ func (cs *State) SetBLSPrivKey(bls *blssignatures.PrivateKey) {
 func (cs *State) SetTimeoutTicker(timeoutTicker TimeoutTicker) {
 	cs.mtx.Lock()
 	cs.timeoutTicker = timeoutTicker
+	cs.mtx.Unlock()
+}
+
+// SetOnUpgrade sets the callback to be invoked when reaching upgrade height.
+// The callback is called before stopping the state, allowing external components
+// (like reactor) to handle the upgrade transition.
+func (cs *State) SetOnUpgrade(fn func()) {
+	cs.mtx.Lock()
+	cs.onUpgrade = fn
 	cs.mtx.Unlock()
 }
 
@@ -1898,6 +1912,25 @@ func (cs *State) finalizeCommit(height int64) {
 		logger.Error("failed to get private validator pubkey", "err", err)
 	}
 
+	// Check for upgrade to sequencer mode
+	if upgrade.IsUpgraded(cs.Height) {
+		logger.Info("Upgrade height reached, switching to sequencer mode",
+			"height", cs.Height,
+			"upgradeHeight", upgrade.UpgradeBlockHeight)
+
+		// Call upgrade callback first (allows reactor to handle transition)
+		if cs.onUpgrade != nil {
+			cs.onUpgrade()
+		}
+
+		// Stop consensus state
+		if err := cs.Stop(); err != nil {
+			logger.Error("Failed to stop consensus state", "err", err)
+			panic(err)
+		}
+		return
+	}
+
 	// cs.StartTime is already set.
 	// Schedule Round0 to start soon.
 	cs.scheduleRound0(&cs.RoundState)
@@ -2298,7 +2331,7 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID, replay bool) (added bo
 		cs.evsw.FireEvent(types.EventVote, vote)
 
 		// if we have all the votes now
-		if cs.LastCommit.HasAll() {
+		if cs.LastCommit.HasAll() && !upgrade.IsUpgraded(cs.Height) {
 			// go straight to new round (skip timeout commit)
 			// cs.scheduleTimeout(time.Duration(0), cs.Height, 0, cstypes.RoundStepNewHeight)
 			if cs.config.SkipTimeoutCommit {
@@ -2455,7 +2488,8 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID, replay bool) (added bo
 
 			if len(blockID.Hash) != 0 {
 				cs.enterCommit(height, vote.Round)
-				if precommits.HasAll() {
+				if precommits.HasAll() &&
+					!upgrade.IsUpgraded(cs.Height) { // if upgrade active, skip the following step
 					if cs.config.SkipTimeoutCommit {
 						cs.enterNewRound(cs.Height, 0)
 					} else {

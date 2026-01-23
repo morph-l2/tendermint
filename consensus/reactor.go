@@ -3,6 +3,7 @@ package consensus
 import (
 	"errors"
 	"fmt"
+	"github.com/tendermint/tendermint/upgrade"
 	"reflect"
 	"sync"
 	"time"
@@ -76,6 +77,14 @@ func NewReactor(consensusState *State, waitSync bool, options ...ReactorOption) 
 func (conR *Reactor) OnStart() error {
 	conR.Logger.Info("Reactor ", "waitSync", conR.WaitSync())
 
+	// Check if we've already upgraded - don't start consensus if so
+	if upgrade.IsUpgraded(conR.conS.Height) {
+		conR.Logger.Info("Already upgraded to sequencer mode, consensus reactor will not start",
+			"height", conR.conS.Height,
+			"upgradeHeight", upgrade.UpgradeBlockHeight)
+		return nil
+	}
+
 	// start routine that computes peer statistics for evaluating peer quality
 	go conR.peerStatsRoutine()
 
@@ -102,6 +111,15 @@ func (conR *Reactor) OnStop() {
 	if !conR.WaitSync() {
 		conR.conS.Wait()
 	}
+}
+
+// StopForUpgrade stops the consensus reactor when upgrading to sequencer mode.
+// This is called when the chain reaches the upgrade height.
+func (conR *Reactor) StopForUpgrade() {
+	conR.Logger.Info("Stopping consensus reactor for sequencer upgrade",
+		"height", conR.conS.Height,
+		"upgradeHeight", upgrade.UpgradeBlockHeight)
+	conR.OnStop()
 }
 
 // SwitchToConsensus switches from block_sync mode to consensus mode.

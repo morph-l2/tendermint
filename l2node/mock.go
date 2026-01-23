@@ -244,3 +244,34 @@ func (l *MockL2Node) AppendBlsData(height int64, batchHash []byte, data BlsData)
 func (l *MockL2Node) BatchHash(batchHeader []byte) ([]byte, error) {
 	return tmhash.Sum(batchHeader), nil
 }
+
+// ==================== V2 Methods for Sequencer Mode ====================
+
+func (l *MockL2Node) RequestBlockDataV2(parentHash []byte) (*BlockV2, bool, error) {
+	// Mock implementation: return a simple block
+	return &BlockV2{
+		Number:    1,
+		Timestamp: 0,
+	}, false, nil
+}
+
+func (l *MockL2Node) ApplyBlockV2(block *BlockV2) error {
+	// Mock implementation: do nothing
+	return nil
+}
+
+func (l *MockL2Node) GetBlockByNumber(height uint64) (*BlockV2, error) {
+	// Mock implementation: return a simple block
+	return &BlockV2{
+		Number:    height,
+		Timestamp: 0,
+	}, nil
+}
+
+func (l *MockL2Node) GetLatestBlockV2() (*BlockV2, error) {
+	// Mock implementation: return block 0
+	return &BlockV2{
+		Number:    0,
+		Timestamp: 0,
+	}, nil
+}

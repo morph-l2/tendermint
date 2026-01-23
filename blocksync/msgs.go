@@ -28,6 +28,8 @@ func EncodeMsg(pb proto.Message) ([]byte, error) {
 		msg.Sum = &bcproto.Message_BlockRequest{BlockRequest: pb}
 	case *bcproto.BlockResponse:
 		msg.Sum = &bcproto.Message_BlockResponse{BlockResponse: pb}
+	case *bcproto.BlockResponseV2:
+		msg.Sum = &bcproto.Message_BlockResponseV2{BlockResponseV2: pb}
 	case *bcproto.NoBlockResponse:
 		msg.Sum = &bcproto.Message_NoBlockResponse{NoBlockResponse: pb}
 	case *bcproto.StatusRequest:
@@ -60,6 +62,8 @@ func DecodeMsg(bz []byte) (proto.Message, error) {
 		return msg.BlockRequest, nil
 	case *bcproto.Message_BlockResponse:
 		return msg.BlockResponse, nil
+	case *bcproto.Message_BlockResponseV2:
+		return msg.BlockResponseV2, nil
 	case *bcproto.Message_NoBlockResponse:
 		return msg.NoBlockResponse, nil
 	case *bcproto.Message_StatusRequest:
@@ -83,7 +87,14 @@ func ValidateMsg(pb proto.Message) error {
 			return errors.New("negative Height")
 		}
 	case *bcproto.BlockResponse:
+		// V1 block format
 		_, err := types.BlockFromProto(msg.Block)
+		if err != nil {
+			return err
+		}
+	case *bcproto.BlockResponseV2:
+		// V2 block format (sequencer mode)
+		_, err := types.BlockV2FromProto(msg.Block)
 		if err != nil {
 			return err
 		}
