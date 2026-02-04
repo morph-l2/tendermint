@@ -3,19 +3,14 @@ package node
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/tendermint/tendermint/upgrade"
-
-	ethcrypto "github.com/morph-l2/go-ethereum/crypto"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -128,6 +123,8 @@ func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
 		DefaultDBProvider,
 		DefaultMetricsProvider(config.Instrumentation),
 		logger,
+		nil,
+		nil,
 	)
 }
 
@@ -253,7 +250,6 @@ type Node struct {
 	// Sequencer mode (after upgrade)
 	stateV2               *sequencer.StateV2
 	blockBroadcastReactor *sequencer.BlockBroadcastReactor
-	sequencerPrivKey      *ecdsa.PrivateKey // ECDSA key for signing blocks in sequencer mode
 }
 
 func initDBs(config *cfg.Config, dbProvider DBProvider) (blockStore *store.BlockStore, stateDB dbm.DB, err error) {
@@ -508,17 +504,19 @@ func createConsensusReactor(
 // These components are created but not started - they will be started when switching to sequencer mode.
 func createSequencerComponents(
 	l2Node l2node.L2Node,
-	sequencerPrivKey *ecdsa.PrivateKey,
 	pool *bc.BlockPool,
 	waitSync bool,
 	logger log.Logger,
+	verifier sequencer.SequencerVerifier,
+	signer sequencer.Signer,
 ) (*sequencer.StateV2, *sequencer.BlockBroadcastReactor, error) {
 	// Create StateV2
 	stateV2, err := sequencer.NewStateV2(
 		l2Node,
-		sequencerPrivKey,
 		sequencer.DefaultBlockInterval,
 		logger,
+		verifier,
+		signer,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create StateV2: %w", err)
@@ -530,6 +528,7 @@ func createSequencerComponents(
 		stateV2,
 		waitSync,
 		logger,
+		verifier,
 	)
 	broadcastReactor.SetLogger(logger.With("module", "sequencer"))
 
@@ -784,6 +783,8 @@ func NewNode(
 	dbProvider DBProvider,
 	metricsProvider MetricsProvider,
 	logger log.Logger,
+	sequencerVerifier sequencer.SequencerVerifier,
+	sequencerSigner sequencer.Signer,
 	options ...Option,
 ) (
 	*Node, error,
@@ -1007,17 +1008,15 @@ func NewNode(
 	if bcR, ok := bcReactor.(*bc.Reactor); ok {
 		l2NodeRef := bcR.L2Node()
 
-		// TODO: just for Phase1, will update in future
-		if err := node.SetSequencerPrivKey(); err != nil {
-			return nil, err
-		}
 		// Create sequencer components
 		if node.stateV2, node.blockBroadcastReactor, err = createSequencerComponents(
 			l2NodeRef,
-			node.sequencerPrivKey,
 			bcR.Pool(),
 			blockSync || stateSync,
-			logger); err != nil {
+			logger,
+			sequencerVerifier,
+			sequencerSigner,
+		); err != nil {
 			return nil, err
 		}
 
@@ -1596,26 +1595,6 @@ func splitAndTrimEmpty(s, sep, cutset string) []string {
 // ============================================================================
 // Sequencer Mode Methods
 // ============================================================================
-
-// TODO: optimize SetSequencerPrivKey in the future
-// SetSequencerPrivKey sets the ECDSA private key for signing blocks in sequencer mode.
-func (n *Node) SetSequencerPrivKey() error {
-	// Load sequencer private key from environment variable
-	if seqKeyHex := os.Getenv("SEQUENCER_PRIVATE_KEY"); seqKeyHex != "" {
-		seqKeyHex = strings.TrimPrefix(seqKeyHex, "0x")
-		keyBytes, err := hex.DecodeString(seqKeyHex)
-		if err != nil {
-			return fmt.Errorf("failed to decode SEQUENCER_PRIVATE_KEY: %w", err)
-		}
-		n.sequencerPrivKey, err = ethcrypto.ToECDSA(keyBytes)
-		if err != nil {
-			return fmt.Errorf("failed to parse SEQUENCER_PRIVATE_KEY: %w", err)
-		}
-		n.Logger.Info("Loaded sequencer private key",
-			"address", ethcrypto.PubkeyToAddress(n.sequencerPrivKey.PublicKey).Hex())
-	}
-	return nil
-}
 
 // startSequencerMode starts the sequencer mode components with logging.
 // This is an internal method used by upgrade callbacks and startup logic.
