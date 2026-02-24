@@ -2,8 +2,15 @@ package sequencer
 
 import (
 	"context"
+	"errors"
 
 	"github.com/morph-l2/go-ethereum/common"
+)
+
+// Sentinel errors for block processing
+var (
+	// ErrInvalidSignature indicates block signature verification failed
+	ErrInvalidSignature = errors.New("invalid block signature")
 )
 
 // SequencerVerifier verifies if an address is the current L1 sequencer

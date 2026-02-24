@@ -2,6 +2,7 @@ package sequencer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"math/rand"
@@ -264,7 +265,8 @@ func (r *BlockBroadcastReactor) onBlockV2(block *BlockV2, src p2p.Peer, verifySi
 	if r.isNextBlock(block) {
 		if err := r.applyBlock(block, verifySig); err != nil {
 			r.logger.Error("Apply failed", "number", block.Number, "hash", block.Hash.Hex(), "err", err)
-			if verifySig {
+			// Only cache blocks with valid signatures (don't cache signature failures)
+			if verifySig && !errors.Is(err, ErrInvalidSignature) {
 				r.logger.Debug("Apply failed, caching block", "number", block.Number, "hash", block.Hash.Hex())
 				r.pendingCache.Add(block, uint64(localHeight))
 			}
@@ -396,7 +398,7 @@ func (r *BlockBroadcastReactor) applyBlock(block *BlockV2, verifySig bool) error
 
 	// Verify signature only for broadcast channel
 	if verifySig && !r.verifySignature(block) {
-		return fmt.Errorf("invalid signature")
+		return ErrInvalidSignature
 	}
 
 	// Verify parent
