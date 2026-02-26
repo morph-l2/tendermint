@@ -49,6 +49,19 @@ type Block struct {
 	LastCommit *Commit      `json:"last_commit"`
 }
 
+// GetHeight returns the block height for SyncableBlock interface.
+func (b *Block) GetHeight() int64 {
+	return b.Height
+}
+
+// GetHash returns the block hash as bytes for SyncableBlock interface.
+func (b *Block) GetHash() []byte {
+	return b.Hash().Bytes()
+}
+
+// Ensure Block implements SyncableBlock
+var _ SyncableBlock = (*Block)(nil)
+
 // ValidateBasic performs basic validation that doesn't involve state data.
 // It checks the internal consistency of the block.
 // Further validation is done using state#ValidateBlock.

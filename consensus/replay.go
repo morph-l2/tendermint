@@ -15,6 +15,7 @@ import (
 	"github.com/tendermint/tendermint/proxy"
 	sm "github.com/tendermint/tendermint/state"
 	"github.com/tendermint/tendermint/types"
+	"github.com/tendermint/tendermint/upgrade"
 )
 
 var crc32c = crc32.MakeTable(crc32.Castagnoli)
@@ -368,6 +369,14 @@ func (h *Handshaker) ReplayBlocks(
 		return appHash, sm.ErrAppBlockHeightTooLow{AppHeight: appBlockHeight, StoreBase: storeBlockBase}
 
 	case storeBlockHeight < appBlockHeight:
+		// In sequencer mode (after upgrade), the app (geth) continues producing blocks
+		// while tendermint's blockstore stops. This is expected behavior.
+		if upgrade.IsUpgraded(storeBlockHeight + 1) {
+			h.logger.Info("Sequencer mode: app height is ahead of store, this is expected",
+				"appHeight", appBlockHeight,
+				"storeHeight", storeBlockHeight)
+			return appHash, nil
+		}
 		// the app should never be ahead of the store (but this is under app's control)
 		return appHash, sm.ErrAppBlockHeightTooHigh{CoreHeight: storeBlockHeight, AppHeight: appBlockHeight}
 

@@ -6,6 +6,7 @@ package blocksync
 import (
 	fmt "fmt"
 	proto "github.com/cosmos/gogoproto/proto"
+	sequencer "github.com/tendermint/tendermint/proto/tendermint/sequencer"
 	types "github.com/tendermint/tendermint/proto/tendermint/types"
 	io "io"
 	math "math"
@@ -113,7 +114,7 @@ func (m *NoBlockResponse) GetHeight() int64 {
 	return 0
 }
 
-// BlockResponse returns block to the requested
+// BlockResponse returns block to the requested (V1 format, for backward compatibility)
 type BlockResponse struct {
 	Block *types.Block `protobuf:"bytes,1,opt,name=block,proto3" json:"block,omitempty"`
 }
@@ -158,6 +159,51 @@ func (m *BlockResponse) GetBlock() *types.Block {
 	return nil
 }
 
+// BlockResponseV2 returns block in V2 format (for sequencer mode)
+type BlockResponseV2 struct {
+	Block *sequencer.BlockV2 `protobuf:"bytes,1,opt,name=block,proto3" json:"block,omitempty"`
+}
+
+func (m *BlockResponseV2) Reset()         { *m = BlockResponseV2{} }
+func (m *BlockResponseV2) String() string { return proto.CompactTextString(m) }
+func (*BlockResponseV2) ProtoMessage()    {}
+func (*BlockResponseV2) Descriptor() ([]byte, []int) {
+	return fileDescriptor_19b397c236e0fa07, []int{3}
+}
+func (m *BlockResponseV2) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *BlockResponseV2) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_BlockResponseV2.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *BlockResponseV2) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_BlockResponseV2.Merge(m, src)
+}
+func (m *BlockResponseV2) XXX_Size() int {
+	return m.Size()
+}
+func (m *BlockResponseV2) XXX_DiscardUnknown() {
+	xxx_messageInfo_BlockResponseV2.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_BlockResponseV2 proto.InternalMessageInfo
+
+func (m *BlockResponseV2) GetBlock() *sequencer.BlockV2 {
+	if m != nil {
+		return m.Block
+	}
+	return nil
+}
+
 // StatusRequest requests the status of a peer.
 type StatusRequest struct {
 }
@@ -166,7 +212,7 @@ func (m *StatusRequest) Reset()         { *m = StatusRequest{} }
 func (m *StatusRequest) String() string { return proto.CompactTextString(m) }
 func (*StatusRequest) ProtoMessage()    {}
 func (*StatusRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_19b397c236e0fa07, []int{3}
+	return fileDescriptor_19b397c236e0fa07, []int{4}
 }
 func (m *StatusRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -205,7 +251,7 @@ func (m *StatusResponse) Reset()         { *m = StatusResponse{} }
 func (m *StatusResponse) String() string { return proto.CompactTextString(m) }
 func (*StatusResponse) ProtoMessage()    {}
 func (*StatusResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_19b397c236e0fa07, []int{4}
+	return fileDescriptor_19b397c236e0fa07, []int{5}
 }
 func (m *StatusResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -255,6 +301,7 @@ type Message struct {
 	//	*Message_BlockResponse
 	//	*Message_StatusRequest
 	//	*Message_StatusResponse
+	//	*Message_BlockResponseV2
 	Sum isMessage_Sum `protobuf_oneof:"sum"`
 }
 
@@ -262,7 +309,7 @@ func (m *Message) Reset()         { *m = Message{} }
 func (m *Message) String() string { return proto.CompactTextString(m) }
 func (*Message) ProtoMessage()    {}
 func (*Message) Descriptor() ([]byte, []int) {
-	return fileDescriptor_19b397c236e0fa07, []int{5}
+	return fileDescriptor_19b397c236e0fa07, []int{6}
 }
 func (m *Message) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -312,12 +359,16 @@ type Message_StatusRequest struct {
 type Message_StatusResponse struct {
 	StatusResponse *StatusResponse `protobuf:"bytes,5,opt,name=status_response,json=statusResponse,proto3,oneof" json:"status_response,omitempty"`
 }
+type Message_BlockResponseV2 struct {
+	BlockResponseV2 *BlockResponseV2 `protobuf:"bytes,6,opt,name=block_response_v2,json=blockResponseV2,proto3,oneof" json:"block_response_v2,omitempty"`
+}
 
 func (*Message_BlockRequest) isMessage_Sum()    {}
 func (*Message_NoBlockResponse) isMessage_Sum() {}
 func (*Message_BlockResponse) isMessage_Sum()   {}
 func (*Message_StatusRequest) isMessage_Sum()   {}
 func (*Message_StatusResponse) isMessage_Sum()  {}
+func (*Message_BlockResponseV2) isMessage_Sum() {}
 
 func (m *Message) GetSum() isMessage_Sum {
 	if m != nil {
@@ -361,6 +412,13 @@ func (m *Message) GetStatusResponse() *StatusResponse {
 	return nil
 }
 
+func (m *Message) GetBlockResponseV2() *BlockResponseV2 {
+	if x, ok := m.GetSum().(*Message_BlockResponseV2); ok {
+		return x.BlockResponseV2
+	}
+	return nil
+}
+
 // XXX_OneofWrappers is for the internal use of the proto package.
 func (*Message) XXX_OneofWrappers() []interface{} {
 	return []interface{}{
@@ -369,6 +427,7 @@ func (*Message) XXX_OneofWrappers() []interface{} {
 		(*Message_BlockResponse)(nil),
 		(*Message_StatusRequest)(nil),
 		(*Message_StatusResponse)(nil),
+		(*Message_BlockResponseV2)(nil),
 	}
 }
 
@@ -376,6 +435,7 @@ func init() {
 	proto.RegisterType((*BlockRequest)(nil), "tendermint.blocksync.BlockRequest")
 	proto.RegisterType((*NoBlockResponse)(nil), "tendermint.blocksync.NoBlockResponse")
 	proto.RegisterType((*BlockResponse)(nil), "tendermint.blocksync.BlockResponse")
+	proto.RegisterType((*BlockResponseV2)(nil), "tendermint.blocksync.BlockResponseV2")
 	proto.RegisterType((*StatusRequest)(nil), "tendermint.blocksync.StatusRequest")
 	proto.RegisterType((*StatusResponse)(nil), "tendermint.blocksync.StatusResponse")
 	proto.RegisterType((*Message)(nil), "tendermint.blocksync.Message")
@@ -384,30 +444,34 @@ func init() {
 func init() { proto.RegisterFile("tendermint/blocksync/types.proto", fileDescriptor_19b397c236e0fa07) }
 
 var fileDescriptor_19b397c236e0fa07 = []byte{
-	// 368 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x7c, 0x93, 0x4d, 0x4f, 0xfa, 0x40,
-	0x10, 0xc6, 0xdb, 0x7f, 0x81, 0x7f, 0x32, 0x50, 0x1a, 0x1b, 0xa3, 0xc4, 0x98, 0x86, 0xd4, 0x97,
-	0xe8, 0xc1, 0x36, 0xc1, 0xa3, 0xc6, 0x03, 0x27, 0x4c, 0x7c, 0x49, 0x4a, 0xbc, 0x78, 0x21, 0x14,
-	0x37, 0x40, 0x94, 0x2e, 0x32, 0xdb, 0x03, 0xdf, 0xc2, 0x2f, 0xe0, 0xf7, 0xf1, 0xc8, 0xd1, 0xa3,
-	0x81, 0x2f, 0x62, 0x98, 0x2d, 0x65, 0x69, 0xb0, 0xb7, 0xdd, 0xe9, 0x33, 0xbf, 0x79, 0xfa, 0x64,
-	0x16, 0xea, 0x82, 0x45, 0x2f, 0x6c, 0x32, 0x1a, 0x46, 0xc2, 0x0f, 0xdf, 0x78, 0xef, 0x15, 0xa7,
-	0x51, 0xcf, 0x17, 0xd3, 0x31, 0x43, 0x6f, 0x3c, 0xe1, 0x82, 0xdb, 0xbb, 0x6b, 0x85, 0x97, 0x2a,
-	0x0e, 0x0e, 0x95, 0x3e, 0x52, 0xcb, 0x6e, 0xd9, 0xe3, 0x9e, 0x42, 0xa5, 0xb9, 0xbc, 0x06, 0xec,
-	0x3d, 0x66, 0x28, 0xec, 0x3d, 0x28, 0x0d, 0xd8, 0xb0, 0x3f, 0x10, 0x35, 0xbd, 0xae, 0x9f, 0x19,
-	0x41, 0x72, 0x73, 0xcf, 0xc1, 0x7a, 0xe0, 0x89, 0x12, 0xc7, 0x3c, 0x42, 0xf6, 0xa7, 0xf4, 0x06,
-	0xcc, 0x4d, 0xe1, 0x05, 0x14, 0x69, 0x24, 0xe9, 0xca, 0x8d, 0x7d, 0x4f, 0xf1, 0x29, 0xfd, 0x4b,
-	0xbd, 0x54, 0xb9, 0x16, 0x98, 0x6d, 0xd1, 0x15, 0x31, 0x26, 0x9e, 0xdc, 0x6b, 0xa8, 0xae, 0x0a,
-	0xf9, 0xa3, 0x6d, 0x1b, 0x0a, 0x61, 0x17, 0x59, 0xed, 0x1f, 0x55, 0xe9, 0xec, 0x7e, 0x1a, 0xf0,
-	0xff, 0x9e, 0x21, 0x76, 0xfb, 0xcc, 0xbe, 0x05, 0x93, 0x66, 0x74, 0x26, 0x12, 0x9d, 0x38, 0x72,
-	0xbd, 0x6d, 0xc9, 0x79, 0x6a, 0x30, 0x2d, 0x2d, 0xa8, 0x84, 0x6a, 0x50, 0x6d, 0xd8, 0x89, 0x78,
-	0x67, 0x45, 0x93, 0xbe, 0x68, 0x6e, 0xb9, 0x71, 0xb2, 0x1d, 0x97, 0xc9, 0xaf, 0xa5, 0x05, 0x56,
-	0x94, 0x89, 0xf4, 0x0e, 0xaa, 0x19, 0xa2, 0x41, 0xc4, 0xa3, 0x5c, 0x83, 0x29, 0xcf, 0x0c, 0xb3,
-	0x34, 0xa4, 0xdc, 0xd2, 0xdf, 0x2d, 0xe4, 0xd1, 0x36, 0x42, 0x5f, 0xd2, 0x50, 0x2d, 0xd8, 0x8f,
-	0x60, 0xa5, 0xb4, 0xc4, 0x5c, 0x91, 0x70, 0xc7, 0xf9, 0xb8, 0xd4, 0x5d, 0x15, 0x37, 0x2a, 0xcd,
-	0x22, 0x18, 0x18, 0x8f, 0x9a, 0x4f, 0x5f, 0x73, 0x47, 0x9f, 0xcd, 0x1d, 0xfd, 0x67, 0xee, 0xe8,
-	0x1f, 0x0b, 0x47, 0x9b, 0x2d, 0x1c, 0xed, 0x7b, 0xe1, 0x68, 0xcf, 0x57, 0xfd, 0xa1, 0x18, 0xc4,
-	0xa1, 0xd7, 0xe3, 0x23, 0x5f, 0x5d, 0xe2, 0xf5, 0x91, 0x76, 0xd8, 0xdf, 0xf6, 0x30, 0xc2, 0x12,
-	0x7d, 0xbb, 0xfc, 0x0d, 0x00, 0x00, 0xff, 0xff, 0xf5, 0x1c, 0xa3, 0x45, 0x37, 0x03, 0x00, 0x00,
+	// 421 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x7c, 0x93, 0xcd, 0x6a, 0xea, 0x40,
+	0x14, 0xc7, 0x93, 0x1b, 0xf5, 0xc2, 0xd1, 0x18, 0x0c, 0x97, 0x7b, 0x45, 0x6e, 0x83, 0xa4, 0x1f,
+	0xb4, 0x8b, 0x26, 0x10, 0x97, 0x2d, 0x5d, 0xb8, 0x28, 0x16, 0xfa, 0x01, 0x91, 0xba, 0xe8, 0x46,
+	0x4c, 0x3a, 0xa8, 0xb4, 0x26, 0x36, 0x33, 0x29, 0xf8, 0x16, 0x7d, 0xac, 0x2e, 0x5d, 0x76, 0x59,
+	0xf4, 0x0d, 0xfa, 0x04, 0x25, 0x33, 0x31, 0xce, 0x04, 0x9b, 0xdd, 0xe4, 0xcc, 0xff, 0xfc, 0xe6,
+	0x7f, 0xce, 0xc9, 0x81, 0x36, 0x41, 0xc1, 0x23, 0x8a, 0x66, 0xd3, 0x80, 0xd8, 0xde, 0x73, 0xe8,
+	0x3f, 0xe1, 0x45, 0xe0, 0xdb, 0x64, 0x31, 0x47, 0xd8, 0x9a, 0x47, 0x21, 0x09, 0xf5, 0x3f, 0x5b,
+	0x85, 0x95, 0x29, 0x5a, 0xff, 0xb9, 0x3c, 0xaa, 0x66, 0xd9, 0x2c, 0xa7, 0xc5, 0x53, 0x31, 0x7a,
+	0x89, 0x51, 0xe0, 0xa3, 0x88, 0xa7, 0x9a, 0x47, 0x50, 0xeb, 0x26, 0x09, 0x6e, 0x72, 0x8b, 0x89,
+	0xfe, 0x17, 0x2a, 0x13, 0x34, 0x1d, 0x4f, 0x48, 0x53, 0x6e, 0xcb, 0xc7, 0x8a, 0x9b, 0x7e, 0x99,
+	0x27, 0xa0, 0xdd, 0x86, 0xa9, 0x12, 0xcf, 0xc3, 0x00, 0xa3, 0x1f, 0xa5, 0x17, 0xa0, 0x8a, 0xc2,
+	0x53, 0x28, 0x53, 0x53, 0x54, 0x57, 0x75, 0xfe, 0x59, 0x5c, 0x25, 0xcc, 0x0b, 0xd3, 0x33, 0x95,
+	0x79, 0x09, 0x9a, 0x90, 0x3f, 0x70, 0xf4, 0x8e, 0x48, 0xd8, 0xe3, 0x09, 0x59, 0x5d, 0x8c, 0x32,
+	0x70, 0x36, 0x1c, 0x0d, 0xd4, 0x3e, 0x19, 0x91, 0x18, 0xa7, 0xb5, 0x99, 0xe7, 0x50, 0xdf, 0x04,
+	0x8a, 0x4b, 0xd0, 0x75, 0x28, 0x79, 0x23, 0x8c, 0x9a, 0xbf, 0x68, 0x94, 0x9e, 0xcd, 0x2f, 0x05,
+	0x7e, 0xdf, 0x20, 0x8c, 0x47, 0x63, 0xa4, 0x5f, 0x81, 0x4a, 0xdf, 0x18, 0x46, 0x0c, 0x9d, 0xfa,
+	0x32, 0xad, 0x5d, 0x33, 0xb2, 0xf8, 0x06, 0xf7, 0x24, 0xb7, 0xe6, 0xf1, 0x0d, 0xef, 0x43, 0x23,
+	0x08, 0x87, 0x1b, 0x1a, 0xf3, 0x45, 0xdf, 0xad, 0x3a, 0x87, 0xbb, 0x71, 0xb9, 0x39, 0xf4, 0x24,
+	0x57, 0x0b, 0x72, 0xa3, 0xb9, 0x86, 0x7a, 0x8e, 0xa8, 0x50, 0xe2, 0x7e, 0xa1, 0xc1, 0x8c, 0xa7,
+	0x7a, 0x79, 0x1a, 0xa6, 0x7d, 0xcb, 0xca, 0x2d, 0x15, 0xd1, 0x84, 0xa6, 0x27, 0x34, 0xcc, 0x07,
+	0xf4, 0x3b, 0xd0, 0x32, 0x5a, 0x6a, 0xae, 0x4c, 0x71, 0x07, 0xc5, 0xb8, 0xcc, 0x5d, 0x1d, 0x8b,
+	0x43, 0xec, 0x43, 0x43, 0x2c, 0x76, 0xf8, 0xea, 0x34, 0x2b, 0x45, 0x1d, 0xcc, 0xfd, 0x5e, 0x49,
+	0x07, 0x3d, 0x31, 0xd4, 0x2d, 0x83, 0x82, 0xe3, 0x59, 0xf7, 0xfe, 0x7d, 0x65, 0xc8, 0xcb, 0x95,
+	0x21, 0x7f, 0xae, 0x0c, 0xf9, 0x6d, 0x6d, 0x48, 0xcb, 0xb5, 0x21, 0x7d, 0xac, 0x0d, 0xe9, 0xe1,
+	0x6c, 0x3c, 0x25, 0x93, 0xd8, 0xb3, 0xfc, 0x70, 0x66, 0xf3, 0x3b, 0xb8, 0x3d, 0xd2, 0x05, 0xb3,
+	0x77, 0xed, 0xb5, 0x57, 0xa1, 0x77, 0x9d, 0xef, 0x00, 0x00, 0x00, 0xff, 0xff, 0xbd, 0x9b, 0xa4,
+	0x83, 0xf6, 0x03, 0x00, 0x00,
 }
 
 func (m *BlockRequest) Marshal() (dAtA []byte, err error) {
@@ -482,6 +546,41 @@ func (m *BlockResponse) MarshalTo(dAtA []byte) (int, error) {
 }
 
 func (m *BlockResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.Block != nil {
+		{
+			size, err := m.Block.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintTypes(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *BlockResponseV2) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *BlockResponseV2) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *BlockResponseV2) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -694,6 +793,27 @@ func (m *Message_StatusResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) 
 	}
 	return len(dAtA) - i, nil
 }
+func (m *Message_BlockResponseV2) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *Message_BlockResponseV2) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	if m.BlockResponseV2 != nil {
+		{
+			size, err := m.BlockResponseV2.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintTypes(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x32
+	}
+	return len(dAtA) - i, nil
+}
 func encodeVarintTypes(dAtA []byte, offset int, v uint64) int {
 	offset -= sovTypes(v)
 	base := offset
@@ -730,6 +850,19 @@ func (m *NoBlockResponse) Size() (n int) {
 }
 
 func (m *BlockResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Block != nil {
+		l = m.Block.Size()
+		n += 1 + l + sovTypes(uint64(l))
+	}
+	return n
+}
+
+func (m *BlockResponseV2) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -834,6 +967,18 @@ func (m *Message_StatusResponse) Size() (n int) {
 	_ = l
 	if m.StatusResponse != nil {
 		l = m.StatusResponse.Size()
+		n += 1 + l + sovTypes(uint64(l))
+	}
+	return n
+}
+func (m *Message_BlockResponseV2) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.BlockResponseV2 != nil {
+		l = m.BlockResponseV2.Size()
 		n += 1 + l + sovTypes(uint64(l))
 	}
 	return n
@@ -1043,6 +1188,92 @@ func (m *BlockResponse) Unmarshal(dAtA []byte) error {
 			}
 			if m.Block == nil {
 				m.Block = &types.Block{}
+			}
+			if err := m.Block.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipTypes(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthTypes
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *BlockResponseV2) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowTypes
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: BlockResponseV2: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: BlockResponseV2: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Block", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTypes
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthTypes
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthTypes
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.Block == nil {
+				m.Block = &sequencer.BlockV2{}
 			}
 			if err := m.Block.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
@@ -1410,6 +1641,41 @@ func (m *Message) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			m.Sum = &Message_StatusResponse{v}
+			iNdEx = postIndex
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BlockResponseV2", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTypes
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthTypes
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthTypes
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			v := &BlockResponseV2{}
+			if err := v.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			m.Sum = &Message_BlockResponseV2{v}
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
