@@ -513,11 +513,17 @@ FOR_LOOP:
 
 			if firstSync.GetHeight()+1 == upgrade.UpgradeBlockHeight {
 				if err := bcR.handleTheLastTMBlock(state, firstSync); err != nil {
-					bcR.Logger.Error("Error in apply last tendermint block, ", "err", err)
-					bcR.pool.PopRequest()
-					blocksSynced++
+					bcR.Logger.Error("Error in apply last tendermint block", "err", err)
+					peerID := bcR.pool.RedoRequest(firstSync.GetHeight())
+					peer := bcR.Switch.Peers().Get(peerID)
+					if peer != nil {
+						bcR.Switch.StopPeerForError(peer, fmt.Errorf("handleTheLastTMBlock error: %v", err))
+					}
 					continue FOR_LOOP
 				}
+				bcR.pool.PopRequest()
+				blocksSynced++
+				continue FOR_LOOP
 			}
 
 			// Check if we're in sequencer mode (after upgrade)
@@ -681,10 +687,14 @@ func (bcR *Reactor) handleTheLastTMBlock(state sm.State, lastSyncable types.Sync
 		return err
 	}
 
-	nilCommit := &types.Commit{Height: last.GetHeight()}
-	bcR.store.SaveBlock(last, lastParts, nilCommit)
 	lastPartSetHeader := lastParts.Header()
 	lastID := types.BlockID{Hash: last.Hash(), BatchHash: last.BatchHash, PartSetHeader: lastPartSetHeader}
+
+	nilCommit := &types.Commit{
+		Height:  last.GetHeight(),
+		BlockID: lastID,
+	}
+	bcR.store.SaveBlock(last, lastParts, nilCommit)
 
 	// TODO: same thing for app - but we would need a way to
 	// get the hash without persisting the state
