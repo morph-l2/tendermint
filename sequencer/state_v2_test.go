@@ -1,15 +1,37 @@
 package sequencer
 
 import (
-	"crypto/ecdsa"
+	"context"
 	"testing"
 	"time"
 
-	"github.com/morph-l2/go-ethereum/crypto"
+	"github.com/morph-l2/go-ethereum/common"
 	"github.com/tendermint/tendermint/l2node"
 	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/types"
 )
+
+// mockSignerImpl is a mock implementation of Signer for testing
+type mockSignerImpl struct {
+	address   common.Address
+	signature []byte
+	isActive  bool
+}
+
+func (m *mockSignerImpl) Sign(data []byte) ([]byte, error) {
+	if m.signature != nil {
+		return m.signature, nil
+	}
+	return make([]byte, 65), nil
+}
+
+func (m *mockSignerImpl) Address() common.Address {
+	return m.address
+}
+
+func (m *mockSignerImpl) IsActiveSequencer(ctx context.Context) (bool, error) {
+	return m.isActive, nil
+}
 
 // newTestMockL2Node creates a mock L2Node for testing
 func newTestMockL2Node() l2node.L2Node {
@@ -20,7 +42,7 @@ func TestStateV2_NewStateV2(t *testing.T) {
 	mockL2Node := newTestMockL2Node()
 	logger := log.NewNopLogger()
 
-	stateV2, err := NewStateV2(mockL2Node, nil, time.Second, logger)
+	stateV2, err := NewStateV2(mockL2Node, time.Second, logger, nil, nil)
 	if err != nil {
 		t.Fatalf("NewStateV2 failed: %v", err)
 	}
@@ -34,7 +56,7 @@ func TestStateV2_LatestHeight(t *testing.T) {
 	mockL2Node := newTestMockL2Node()
 	logger := log.NewNopLogger()
 
-	stateV2, err := NewStateV2(mockL2Node, nil, time.Second, logger)
+	stateV2, err := NewStateV2(mockL2Node, time.Second, logger, nil, nil)
 	if err != nil {
 		t.Fatalf("NewStateV2 failed: %v", err)
 	}
@@ -46,24 +68,29 @@ func TestStateV2_LatestHeight(t *testing.T) {
 	}
 }
 
-func TestStateV2_IsSequencerNode(t *testing.T) {
+func TestStateV2_IsSequencerMode(t *testing.T) {
 	mockL2Node := newTestMockL2Node()
 	logger := log.NewNopLogger()
 
-	// Generate a test private key
-	privKey, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("Failed to generate key: %v", err)
-	}
-
-	stateV2, err := NewStateV2(mockL2Node, privKey, time.Second, logger)
+	// Without signer, sequencerMode should be false
+	stateV2, err := NewStateV2(mockL2Node, time.Second, logger, nil, nil)
 	if err != nil {
 		t.Fatalf("NewStateV2 failed: %v", err)
 	}
 
-	// Before start, isSequencer is not set
-	if stateV2.IsSequencerNode() {
-		t.Error("IsSequencerNode should be false before start")
+	if stateV2.IsSequencerMode() {
+		t.Error("IsSequencerMode should be false when signer is nil")
+	}
+
+	// With mock signer, sequencerMode should be true
+	mockSigner := &mockSignerImpl{}
+	stateV2WithSigner, err := NewStateV2(mockL2Node, time.Second, logger, nil, mockSigner)
+	if err != nil {
+		t.Fatalf("NewStateV2 failed: %v", err)
+	}
+
+	if !stateV2WithSigner.IsSequencerMode() {
+		t.Error("IsSequencerMode should be true when signer is provided")
 	}
 }
 
@@ -71,13 +98,12 @@ func TestStateV2_SignBlock(t *testing.T) {
 	mockL2Node := newTestMockL2Node()
 	logger := log.NewNopLogger()
 
-	// Generate a test private key
-	privKey, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("Failed to generate key: %v", err)
+	// Create mock signer
+	mockSigner := &mockSignerImpl{
+		signature: make([]byte, 65), // Mock 65-byte signature
 	}
 
-	stateV2, err := NewStateV2(mockL2Node, privKey, time.Second, logger)
+	stateV2, err := NewStateV2(mockL2Node, time.Second, logger, nil, mockSigner)
 	if err != nil {
 		t.Fatalf("NewStateV2 failed: %v", err)
 	}
@@ -104,12 +130,12 @@ func TestStateV2_SignBlock(t *testing.T) {
 	}
 }
 
-func TestStateV2_SignBlockWithoutKey(t *testing.T) {
+func TestStateV2_SignBlockWithoutSigner(t *testing.T) {
 	mockL2Node := newTestMockL2Node()
 	logger := log.NewNopLogger()
 
-	// Create StateV2 without private key
-	stateV2, err := NewStateV2(mockL2Node, nil, time.Second, logger)
+	// Create StateV2 without signer
+	stateV2, err := NewStateV2(mockL2Node, time.Second, logger, nil, nil)
 	if err != nil {
 		t.Fatalf("NewStateV2 failed: %v", err)
 	}
@@ -119,22 +145,19 @@ func TestStateV2_SignBlockWithoutKey(t *testing.T) {
 		Hash:   [32]byte{1, 2, 3, 4},
 	}
 
-	// Sign should fail without private key
+	// Sign should fail without signer
 	err = stateV2.signBlock(block)
 	if err == nil {
-		t.Error("signBlock should fail without private key")
+		t.Error("signBlock should fail without signer")
 	}
 }
 
-// TestStateV2_UpdateLatestBlock and TestStateV2_UpdateLatestBlock_NonContinuous
-// were removed because UpdateLatestBlock was merged into ApplyBlock
-
-// Helper to create a test StateV2 with a running state
-func createTestStateV2(t *testing.T, privKey *ecdsa.PrivateKey) *StateV2 {
+// Helper to create a test StateV2
+func createTestStateV2(t *testing.T, signer Signer) *StateV2 {
 	mockL2Node := newTestMockL2Node()
 	logger := log.NewNopLogger()
 
-	stateV2, err := NewStateV2(mockL2Node, privKey, time.Second, logger)
+	stateV2, err := NewStateV2(mockL2Node, time.Second, logger, nil, signer)
 	if err != nil {
 		t.Fatalf("NewStateV2 failed: %v", err)
 	}

@@ -1,14 +1,14 @@
 package sequencer
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"math/rand"
 	"reflect"
 	"sync"
 	"time"
-
-	"github.com/tendermint/tendermint/upgrade"
 
 	"github.com/cosmos/gogoproto/proto"
 	"github.com/morph-l2/go-ethereum/common"
@@ -26,11 +26,12 @@ const (
 	SequencerSyncChannel  = byte(0x51) // For block sync requests (no signature verification)
 
 	// TODO: make these parameters configurable
-	smallGapThreshold    = 5    // Gap for direct block request
+	smallGapThreshold    = 20   // Gap for direct block request
 	recentBlocksCapacity = 1000 // Recent applied blocks cache
 	seenBlocksCapacity   = 2000 // Seen blocks for dedup
 	peerSentCapacity     = 500  // Per-peer sent tracking
-	applyInterval        = 500 * time.Millisecond
+	applyInterval        = 10 * time.Second
+	syncInterval         = 10 * time.Second
 )
 
 // BlockPool interface (avoids import cycle)
@@ -58,10 +59,18 @@ type BlockBroadcastReactor struct {
 	applyMtx         sync.Mutex // Protects applyBlock to ensure sequential block application
 	sequencerStarted bool       // True when sequencer mode is actually running (not just registered)
 	logger           log.Logger
+
+	verifier SequencerVerifier
 }
 
 // NewBlockBroadcastReactor creates a new reactor.
-func NewBlockBroadcastReactor(pool BlockPool, stateV2 *StateV2, waitSync bool, logger log.Logger) *BlockBroadcastReactor {
+func NewBlockBroadcastReactor(
+	pool BlockPool,
+	stateV2 *StateV2,
+	waitSync bool,
+	logger log.Logger,
+	verifier SequencerVerifier,
+) *BlockBroadcastReactor {
 	r := &BlockBroadcastReactor{
 		pool:         pool,
 		stateV2:      stateV2,
@@ -71,6 +80,7 @@ func NewBlockBroadcastReactor(pool BlockPool, stateV2 *StateV2, waitSync bool, l
 		seenBlocks:   NewHashSet(seenBlocksCapacity),
 		peerSent:     NewPeerHashSet(peerSentCapacity),
 		logger:       logger.With("module", "broadcastReactor"),
+		verifier:     verifier,
 	}
 	r.BaseReactor = *p2p.NewBaseReactor("BlockBroadcast", r)
 	return r
@@ -104,7 +114,7 @@ func (r *BlockBroadcastReactor) StartSequencerRoutines() error {
 		}
 	}
 
-	if upgrade.IsSequencer(r.stateV2.seqAddr) {
+	if r.stateV2.IsSequencerMode() {
 		go r.broadcastRoutine()
 	} else {
 		go r.applyRoutine()
@@ -117,12 +127,6 @@ func (r *BlockBroadcastReactor) StartSequencerRoutines() error {
 func (r *BlockBroadcastReactor) OnStop() {
 	r.logger.Info("Stopping BlockBroadcastReactor")
 }
-
-// func (r *BlockBroadcastReactor) SwitchToSequencer() error {
-// 	r.logger.Info("Sync mode switching to sequencer mode")
-// 	r.waitSync = false
-// 	return r.StartSequencerRoutines()
-// }
 
 func (r *BlockBroadcastReactor) GetChannels() []*p2p.ChannelDescriptor {
 	return []*p2p.ChannelDescriptor{
@@ -220,15 +224,18 @@ func (r *BlockBroadcastReactor) broadcastRoutine() {
 // applyRoutine: periodically try to apply blocks from unlink cache
 func (r *BlockBroadcastReactor) applyRoutine() {
 	r.logger.Info("Starting block apply routine")
-	ticker := time.NewTicker(applyInterval)
-	defer ticker.Stop()
+	tickerApply := time.NewTicker(applyInterval)
+	tickerSync := time.NewTicker(syncInterval)
+	defer tickerSync.Stop()
+	defer tickerApply.Stop()
 
 	for {
 		select {
 		case <-r.Quit():
 			return
-		case <-ticker.C:
+		case <-tickerApply.C:
 			r.tryApplyFromCache()
+		case <-tickerSync.C:
 			r.checkSyncGap()
 		}
 	}
@@ -242,9 +249,10 @@ func (r *BlockBroadcastReactor) applyRoutine() {
 // verifySig: true for broadcast channel, false for sync channel
 func (r *BlockBroadcastReactor) onBlockV2(block *BlockV2, src p2p.Peer, verifySig bool) {
 	r.logger.Debug("onBlockV2", "number", block.Number, "hash", block.Hash.Hex(), "verifySig", verifySig)
-	// Dedup: skip if already seen
-	if r.markSeen(block.Hash) {
-		r.logger.Debug("onBlockV2 dedup", "number", block.Number, "hash", block.Hash.Hex(), "verifySig", verifySig)
+	// Dedup: skip if already seen, only for broadcast channel.
+	// Sync channel should not check dedup.
+	if r.markSeen(block.Hash) && verifySig {
+		r.logger.Debug("onBlockV2 broadcast dedup", "number", block.Number, "hash", block.Hash.Hex(), "verifySig", verifySig)
 		return
 	}
 
@@ -256,17 +264,22 @@ func (r *BlockBroadcastReactor) onBlockV2(block *BlockV2, src p2p.Peer, verifySi
 	// Try apply if it's the next block (height + parent match)
 	if r.isNextBlock(block) {
 		if err := r.applyBlock(block, verifySig); err != nil {
-			r.logger.Error("Apply failed, caching", "number", block.Number, "err", err)
-			r.pendingCache.Add(block, uint64(localHeight))
+			r.logger.Error("Apply failed", "number", block.Number, "hash", block.Hash.Hex(), "err", err)
+			// Only cache blocks with valid signatures (don't cache signature failures)
+			if verifySig && !errors.Is(err, ErrInvalidSignature) {
+				r.logger.Debug("Apply failed, caching block", "number", block.Number, "hash", block.Hash.Hex())
+				r.pendingCache.Add(block, uint64(localHeight))
+			}
+			return
 		}
-	} else {
+		// Gossip the latest block to other peers
+		if verifySig {
+			r.gossipBlock(block, src.ID())
+		}
+	} else if verifySig {
 		// Cache all other blocks (future or past for potential reorg)
+		r.logger.Debug("future block, caching", "number", block.Number, "hash", block.Hash.Hex())
 		r.pendingCache.Add(block, uint64(localHeight))
-	}
-
-	// Gossip the latest block to other peers
-	if verifySig {
-		r.gossipBlock(block, src.ID())
 	}
 }
 
@@ -290,7 +303,7 @@ func (r *BlockBroadcastReactor) tryApplyFromCache() {
 			break
 		}
 		r.logger.Debug("Trying to apply from cache", "number", block.Number, "hash", block.Hash.Hex())
-		if err := r.applyBlock(block, false); err != nil { // no signature verification
+		if err := r.applyBlock(block, true); err != nil { // should signature verification
 			r.logger.Error("Apply from cache failed", "number", block.Number, "err", err)
 			break
 		}
@@ -310,16 +323,12 @@ func (r *BlockBroadcastReactor) checkSyncGap() {
 	maxPeerHeight := r.pool.MaxPeerHeight()
 	gap := maxPeerHeight - localHeight
 	r.logger.Debug("Checking sync goroutines", "gap", gap, "localHeight", localHeight, "maxPeerHeight", maxPeerHeight)
-	if gap <= 0 {
+	if gap <= smallGapThreshold {
 		return
 	}
 
 	// Request missing blocks (limited to smallGapThreshold per cycle to avoid spam)
-	end := localHeight + int64(smallGapThreshold)
-	if end > maxPeerHeight {
-		end = maxPeerHeight
-	}
-	r.requestMissingBlocks(localHeight+1, end)
+	r.requestMissingBlocks(localHeight+1, maxPeerHeight)
 }
 
 // requestMissingBlocks requests blocks in range [start, end] from peers
@@ -389,7 +398,7 @@ func (r *BlockBroadcastReactor) applyBlock(block *BlockV2, verifySig bool) error
 
 	// Verify signature only for broadcast channel
 	if verifySig && !r.verifySignature(block) {
-		return fmt.Errorf("invalid signature")
+		return ErrInvalidSignature
 	}
 
 	// Verify parent
@@ -421,12 +430,24 @@ func (r *BlockBroadcastReactor) verifySignature(block *BlockV2) bool {
 		return false
 	}
 	recoveredAddr := crypto.PubkeyToAddress(*pubKey)
-	expectedAddr := upgrade.SequencerAddress
-	if !upgrade.IsSequencer(recoveredAddr) {
-		r.logger.Error("Signature verification failed: address mismatch",
+
+	if r.verifier == nil {
+		r.logger.Error("Sequencer verifier not set", "block", block.Number)
+		return false
+	}
+
+	isSeq, err := r.verifier.IsSequencer(context.Background(), recoveredAddr)
+	if err != nil {
+		r.logger.Error("Signature verification failed: verifier error",
 			"block", block.Number,
 			"recovered", recoveredAddr.Hex(),
-			"expected", expectedAddr.Hex())
+			"err", err)
+		return false
+	}
+	if !isSeq {
+		r.logger.Error("Signature verification failed: not a valid sequencer",
+			"block", block.Number,
+			"recovered", recoveredAddr.Hex())
 		return false
 	}
 	return true

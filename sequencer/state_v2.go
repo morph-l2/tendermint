@@ -1,15 +1,10 @@
 package sequencer
 
 import (
-	"crypto/ecdsa"
+	"context"
 	"fmt"
 	"sync"
 	"time"
-
-	"github.com/tendermint/tendermint/upgrade"
-
-	"github.com/morph-l2/go-ethereum/common"
-	"github.com/morph-l2/go-ethereum/crypto"
 
 	"github.com/tendermint/tendermint/l2node"
 	"github.com/tendermint/tendermint/libs/log"
@@ -19,7 +14,7 @@ import (
 const (
 	// DefaultBlockInterval is the default interval between blocks
 	// TODO: make this configurable
-	DefaultBlockInterval = 300 * time.Millisecond
+	DefaultBlockInterval = 3000 * time.Millisecond
 )
 
 // StateV2 manages the state for centralized sequencer mode.
@@ -30,14 +25,14 @@ type StateV2 struct {
 	mtx sync.RWMutex
 
 	// Core state
-	latestBlock *BlockV2
-	isSequencer bool
+	latestBlock   *BlockV2
+	sequencerMode bool // Whether the node is started in sequencer mode (has signer configured)
 
 	// Dependencies
-	l2Node  l2node.L2Node
-	privKey *ecdsa.PrivateKey
-	seqAddr common.Address
-	logger  log.Logger
+	l2Node   l2node.L2Node
+	signer   Signer
+	verifier SequencerVerifier
+	logger   log.Logger
 
 	// Block production
 	blockTicker   *time.Ticker
@@ -51,26 +46,23 @@ type StateV2 struct {
 }
 
 // NewStateV2 creates a new StateV2 instance.
+// sequencerMode is determined by whether a signer is provided.
 func NewStateV2(
 	l2Node l2node.L2Node,
-	privKey *ecdsa.PrivateKey,
 	blockInterval time.Duration,
 	logger log.Logger,
+	verifier SequencerVerifier,
+	signer Signer,
 ) (*StateV2, error) {
 	if blockInterval <= 0 {
 		blockInterval = DefaultBlockInterval
 	}
 
-	// Derive sequencer address from private key
-	var seqAddr common.Address
-	if privKey != nil {
-		seqAddr = crypto.PubkeyToAddress(privKey.PublicKey)
-	}
-
 	s := &StateV2{
 		l2Node:        l2Node,
-		privKey:       privKey,
-		seqAddr:       seqAddr,
+		signer:        signer,
+		verifier:      verifier,
+		sequencerMode: signer != nil,
 		blockInterval: blockInterval,
 		logger:        logger.With("module", "stateV2"),
 		broadcastCh:   make(chan *BlockV2, 100),
@@ -83,7 +75,7 @@ func NewStateV2(
 }
 
 // OnStart implements service.Service.
-// It initializes state from geth and starts block production if this node is the sequencer.
+// It initializes state from geth and starts block production if this node is the active sequencer.
 func (s *StateV2) OnStart() error {
 	// Initialize latest block from geth
 	latestBlock, err := s.l2Node.GetLatestBlockV2()
@@ -93,19 +85,29 @@ func (s *StateV2) OnStart() error {
 
 	s.mtx.Lock()
 	s.latestBlock = latestBlock
-
-	// Check if this node is the sequencer
-	s.isSequencer = upgrade.IsSequencer(s.seqAddr)
 	s.mtx.Unlock()
+
+	var seqAddr string
+	var isActiveSequencer bool
+	if s.signer != nil {
+		seqAddr = s.signer.Address().Hex()
+		// Check if this node is the active sequencer via L1 contract
+		isActiveSequencer, err = s.signer.IsActiveSequencer(context.Background())
+		if err != nil {
+			s.logger.Error("Failed to check sequencer status", "error", err)
+			isActiveSequencer = false
+		}
+	}
 
 	s.logger.Info("StateV2 initialized",
 		"latestHeight", s.latestBlock.Number,
 		"latestHash", s.latestBlock.Hash.Hex(),
-		"isSequencer", s.isSequencer,
-		"seqAddr", s.seqAddr.Hex())
+		"sequencerMode", s.sequencerMode,
+		"isActiveSequencer", isActiveSequencer,
+		"seqAddr", seqAddr)
 
-	// Start block production if this node is the sequencer
-	if s.isSequencer {
+	// Start block production if sequencer mode is enabled and this node is the active sequencer
+	if s.sequencerMode && isActiveSequencer {
 		go s.produceBlockRoutine()
 	}
 
@@ -184,23 +186,21 @@ func (s *StateV2) produceBlock() {
 	}
 }
 
-// signBlock signs the block hash with the sequencer's private key.
+// signBlock signs the block hash with the signer.
 func (s *StateV2) signBlock(block *BlockV2) error {
-	if s.privKey == nil {
-		return fmt.Errorf("private key not set")
+	if s.signer == nil {
+		return fmt.Errorf("signer not set")
 	}
 
 	// Sign the block hash
-	signature, err := crypto.Sign(block.Hash.Bytes(), s.privKey)
+	signature, err := s.signer.Sign(block.Hash.Bytes())
 	if err != nil {
 		return fmt.Errorf("failed to sign block: %w", err)
 	}
 
 	block.Signature = signature
 
-	// Debug: log signer address
-	signerAddr := crypto.PubkeyToAddress(s.privKey.PublicKey)
-	s.logger.Debug("Block signed", "number", block.Number, "hash", block.Hash.Hex(), "signer", signerAddr.Hex())
+	s.logger.Debug("Block signed", "number", block.Number, "hash", block.Hash.Hex(), "signer", s.signer.Address().Hex())
 	return nil
 }
 
@@ -249,9 +249,8 @@ func (s *StateV2) GetBlockByNumber(number uint64) (*BlockV2, error) {
 	return s.l2Node.GetBlockByNumber(number)
 }
 
-// IsSequencerNode returns whether this node is the sequencer.
-func (s *StateV2) IsSequencerNode() bool {
-	s.mtx.RLock()
-	defer s.mtx.RUnlock()
-	return s.isSequencer
+// IsSequencerMode returns whether this node is started in sequencer mode.
+// This means the node has a signer configured and can potentially produce blocks.
+func (s *StateV2) IsSequencerMode() bool {
+	return s.sequencerMode
 }

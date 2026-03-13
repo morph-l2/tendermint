@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/tendermint/tendermint/upgrade"
 	"io"
 	"os"
 	"runtime/debug"
 	"sort"
 	"time"
+
+	"github.com/tendermint/tendermint/upgrade"
 
 	tmbytes "github.com/tendermint/tendermint/libs/bytes"
 
@@ -196,7 +197,7 @@ func NewState(
 	cs.setProposal = cs.defaultSetProposal
 
 	// We have no votes, so reconstruct LastCommit from SeenCommit.
-	if state.LastBlockHeight > 0 {
+	if state.LastBlockHeight > 0 && !upgrade.IsUpgraded(state.LastBlockHeight+1) {
 		cs.reconstructLastCommit(state)
 	}
 
@@ -675,6 +676,11 @@ func (cs *State) updateToState(state sm.State) {
 		cs.LastCommit = cs.Votes.Precommits(cs.CommitRound)
 
 	case cs.LastCommit == nil:
+		if upgrade.IsUpgraded(state.LastBlockHeight + 1) {
+			// Already upgraded to sequencer mode, consensus won't run.
+			// LastCommit is not needed, skip the panic.
+			break
+		}
 		// NOTE: when Tendermint starts, it has no votes. reconstructLastCommit
 		// must be called to reconstruct LastCommit from SeenCommit.
 		panic(fmt.Sprintf(
