@@ -1,0 +1,24 @@
+syntax = "proto3";
+package tendermint.sequencer;
+
+option go_package = "github.com/tendermint/tendermint/proto/tendermint/sequencer";
+
+// BlockV2 is the block format after upgrade to centralized sequencer mode
+message BlockV2 {
+  bytes  parent_hash           = 1;
+  bytes  miner                 = 2;
+  uint64 number                = 3;
+  uint64 gas_limit             = 4;
+  bytes  base_fee              = 5;
+  uint64 timestamp             = 6;
+  repeated bytes transactions  = 7;
+  bytes  state_root            = 8;
+  uint64 gas_used              = 9;
+  bytes  receipt_root          = 10;
+  bytes  logs_bloom            = 11;
+  bytes  withdraw_trie_root    = 12;
+  uint64 next_l1_message_index = 13;
+  bytes  hash                  = 14;
+  bytes  signature             = 15;
+}
+

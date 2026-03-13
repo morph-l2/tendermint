@@ -4,6 +4,7 @@ package tendermint.blocksync;
 option go_package = "github.com/tendermint/tendermint/proto/tendermint/blocksync";
 
 import "tendermint/types/block.proto";
+import "tendermint/sequencer/types.proto";
 
 // BlockRequest requests a block for a specific height
 message BlockRequest {
@@ -15,9 +16,14 @@ message NoBlockResponse {
   int64 height = 1;
 }
 
-// BlockResponse returns block to the requested
+// BlockResponse returns block to the requested (V1 format, for backward compatibility)
 message BlockResponse {
   tendermint.types.Block block = 1;
+}
+
+// BlockResponseV2 returns block in V2 format (for sequencer mode)
+message BlockResponseV2 {
+  tendermint.sequencer.BlockV2 block = 1;
 }
 
 // StatusRequest requests the status of a peer.
@@ -32,10 +38,11 @@ message StatusResponse {
 
 message Message {
   oneof sum {
-    BlockRequest    block_request     = 1;
-    NoBlockResponse no_block_response = 2;
-    BlockResponse   block_response    = 3;
-    StatusRequest   status_request    = 4;
-    StatusResponse  status_response   = 5;
+    BlockRequest      block_request       = 1;
+    NoBlockResponse   no_block_response   = 2;
+    BlockResponse     block_response      = 3;
+    StatusRequest     status_request      = 4;
+    StatusResponse    status_response     = 5;
+    BlockResponseV2   block_response_v2   = 6;  // New: V2 block response
   }
 }
