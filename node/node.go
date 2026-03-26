@@ -252,7 +252,7 @@ type Node struct {
 	blockBroadcastReactor *sequencer.BlockBroadcastReactor
 }
 
-func initDBs(config *cfg.Config, dbProvider DBProvider) (blockStore *store.BlockStore, stateDB dbm.DB, err error) {
+func initDBs(config *cfg.Config, dbProvider DBProvider) (blockStore *store.BlockStore, stateDB dbm.DB, sigStore *sequencer.SignatureStore, err error) {
 	var blockStoreDB dbm.DB
 	blockStoreDB, err = dbProvider(&DBContext{"blockstore", config})
 	if err != nil {
@@ -264,6 +264,14 @@ func initDBs(config *cfg.Config, dbProvider DBProvider) (blockStore *store.Block
 	if err != nil {
 		return
 	}
+
+	// TODO: add a new store, notify the-3rd parties to integrate
+	var sigDB dbm.DB
+	sigDB, err = dbProvider(&DBContext{"signatures", config})
+	if err != nil {
+		return
+	}
+	sigStore = sequencer.NewSignatureStore(sigDB)
 
 	return
 }
@@ -509,6 +517,8 @@ func createSequencerComponents(
 	logger log.Logger,
 	verifier sequencer.SequencerVerifier,
 	signer sequencer.Signer,
+	sigStore *sequencer.SignatureStore,
+	ha sequencer.SequencerHA,
 ) (*sequencer.StateV2, *sequencer.BlockBroadcastReactor, error) {
 	// Create StateV2
 	stateV2, err := sequencer.NewStateV2(
@@ -517,6 +527,8 @@ func createSequencerComponents(
 		logger,
 		verifier,
 		signer,
+		sigStore,
+		ha,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create StateV2: %w", err)
@@ -529,6 +541,7 @@ func createSequencerComponents(
 		waitSync,
 		logger,
 		verifier,
+		sigStore,
 	)
 	broadcastReactor.SetLogger(logger.With("module", "sequencer"))
 
@@ -789,7 +802,7 @@ func NewNode(
 ) (
 	*Node, error,
 ) {
-	blockStore, stateDB, err := initDBs(config, dbProvider)
+	blockStore, stateDB, sigStore, err := initDBs(config, dbProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -1016,12 +1029,16 @@ func NewNode(
 			logger,
 			sequencerVerifier,
 			sequencerSigner,
+			sigStore,
+			nil, // ha: nil for now, Raft HA will be injected in a future milestone
 		); err != nil {
 			return nil, err
 		}
 
-		// Set stateV2 on blocksync reactor for post-upgrade sync
+		// Set stateV2&verifier&sigStore on blocksync reactor for post-upgrade
 		bcR.SetStateV2(node.stateV2)
+		bcR.SetVerifier(sequencerVerifier)
+		bcR.SetSigStore(sigStore)
 
 		// Register BlockBroadcastReactor with Switch
 		sw.AddReactor("SEQUENCER", node.blockBroadcastReactor)

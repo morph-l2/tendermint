@@ -11,6 +11,7 @@ import (
 	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/p2p"
 	bcproto "github.com/tendermint/tendermint/proto/tendermint/blocksync"
+	"github.com/tendermint/tendermint/sequencer"
 	sm "github.com/tendermint/tendermint/state"
 	"github.com/tendermint/tendermint/store"
 	"github.com/tendermint/tendermint/types"
@@ -76,6 +77,10 @@ type Reactor struct {
 
 	requestsCh <-chan BlockRequest
 	errorsCh   <-chan peerError
+
+	// Sequencer signature verification (set after upgrade via SetVerifier/SetSigStore)
+	verifier sequencer.SequencerVerifier
+	sigStore *sequencer.SignatureStore
 }
 
 // NewReactor returns new reactor instance.
@@ -139,6 +144,16 @@ func (bcR *Reactor) SetLogger(l log.Logger) {
 // SetStateV2 sets the sequencer state (called after upgrade).
 func (bcR *Reactor) SetStateV2(stateV2 SequencerState) {
 	bcR.stateV2 = stateV2
+}
+
+// SetVerifier sets the sequencer verifier for block signature validation.
+func (bcR *Reactor) SetVerifier(v sequencer.SequencerVerifier) {
+	bcR.verifier = v
+}
+
+// SetSigStore sets the signature store for persisting/attaching block signatures.
+func (bcR *Reactor) SetSigStore(s *sequencer.SignatureStore) {
+	bcR.sigStore = s
 }
 
 // Pool returns the block pool for broadcast reactor to check peer heights.
@@ -271,6 +286,19 @@ func (bcR *Reactor) respondToPeerV2(msg *bcproto.BlockRequest, src p2p.Peer) boo
 		return src.TrySend(BlocksyncChannel, msgBytes)
 	}
 
+	// Attach signature from store; if unavailable, refuse to serve
+	sig, err := bcR.sigStore.GetSignature(blockData.Hash)
+	if err != nil {
+		bcR.Logger.Error("No signature available for block, refusing to serve",
+			"height", msg.Height, "err", err)
+		msgBytes, encErr := EncodeMsg(&bcproto.NoBlockResponse{Height: msg.Height})
+		if encErr != nil {
+			return false
+		}
+		return src.TrySend(BlocksyncChannel, msgBytes)
+	}
+	blockData.Signature = sig
+
 	bcR.Logger.Debug("respondToPeerV2: got block from geth",
 		"height", msg.Height,
 		"hash", blockData.Hash.Hex())
@@ -293,8 +321,7 @@ func (bcR *Reactor) L2Node() l2node.L2Node {
 }
 
 // syncBlockV2 handles syncing a single BlockV2 in sequencer mode.
-// No signature verification during sync - only broadcast channel verifies signatures.
-// Returns true if sync was successful, false if there was an error (already handled).
+// Verifies block signature using the history-aware verifier, then applies.
 func (bcR *Reactor) syncBlockV2(block types.SyncableBlock, blocksSynced *uint64, lastRate *float64, lastHundred *time.Time) bool {
 	blockV2, ok := block.(*types.BlockV2)
 	if !ok {
@@ -303,11 +330,23 @@ func (bcR *Reactor) syncBlockV2(block types.SyncableBlock, blocksSynced *uint64,
 		return false
 	}
 
-	// Apply BlockV2 via stateV2 (no signature verification during sync)
+	// Verify block signature (uses IsSequencerAt with history-aware lookup)
+	if err := sequencer.VerifyBlockSignature(bcR.verifier, blockV2); err != nil {
+		bcR.Logger.Error("Block signature verification failed", "height", blockV2.Number, "err", err)
+		bcR.pool.RedoRequest(blockV2.GetHeight())
+		return false
+	}
+
+	// Apply BlockV2 via stateV2
 	if err := bcR.stateV2.ApplyBlock(blockV2); err != nil {
 		bcR.Logger.Error("Failed to apply BlockV2", "height", blockV2.Number, "err", err)
 		bcR.pool.RedoRequest(blockV2.GetHeight())
 		return false
+	}
+
+	// Persist signature for historical serving
+	if err := bcR.sigStore.SaveSignature(blockV2.Hash, blockV2.Signature); err != nil {
+		panic(fmt.Sprintf("failed to save signature at height %d: %v", blockV2.Number, err))
 	}
 
 	bcR.pool.PopRequest()
