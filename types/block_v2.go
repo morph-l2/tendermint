@@ -2,11 +2,9 @@ package types
 
 import (
 	"errors"
-	"fmt"
 	"math/big"
 
 	"github.com/morph-l2/go-ethereum/common"
-	"github.com/morph-l2/go-ethereum/crypto"
 	seqproto "github.com/tendermint/tendermint/proto/tendermint/sequencer"
 )
 
@@ -60,35 +58,6 @@ type SyncableBlock interface {
 
 // Ensure BlockV2 implements SyncableBlock
 var _ SyncableBlock = (*BlockV2)(nil)
-
-// SequencerAddress is the expected sequencer address for signature verification.
-// This will be set by the sequencer package at init time.
-var SequencerAddress common.Address
-
-// SetSequencerAddress sets the expected sequencer address.
-func SetSequencerAddress(addr common.Address) {
-	SequencerAddress = addr
-}
-
-// IsSequencerAddress checks if the given address is the expected sequencer.
-func IsSequencerAddress(addr common.Address) bool {
-	return addr == SequencerAddress
-}
-
-// RecoverBlockV2Signer recovers the signer address from the block's signature.
-func RecoverBlockV2Signer(block *BlockV2) (common.Address, error) {
-	if len(block.Signature) == 0 {
-		return common.Address{}, fmt.Errorf("block has no signature")
-	}
-
-	// Recover the public key from the signature
-	pubKey, err := crypto.SigToPub(block.Hash.Bytes(), block.Signature)
-	if err != nil {
-		return common.Address{}, fmt.Errorf("failed to recover public key: %w", err)
-	}
-
-	return crypto.PubkeyToAddress(*pubKey), nil
-}
 
 // BlockV2FromProto converts a proto BlockV2 to types.BlockV2.
 func BlockV2FromProto(pb *seqproto.BlockV2) (*BlockV2, error) {
