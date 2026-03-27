@@ -2,7 +2,6 @@ package sequencer
 
 import (
 	"fmt"
-	"math/big"
 	"math/rand"
 	"reflect"
 	"sync"
@@ -14,7 +13,6 @@ import (
 	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/p2p"
 	bcproto "github.com/tendermint/tendermint/proto/tendermint/blocksync"
-	seqproto "github.com/tendermint/tendermint/proto/tendermint/sequencer"
 	"github.com/tendermint/tendermint/types"
 )
 
@@ -446,7 +444,7 @@ func (r *BlockBroadcastReactor) findPeerWithHeight(peers []p2p.Peer, height int6
 		return nil
 	}
 
-	start := rand.Intn(n)
+	start := rand.Intn(n) //nolint:gosec // non-security: peer selection randomization
 	for i := 0; i < n; i++ {
 		peer := peers[(start+i)%n]
 		if r.pool.GetPeerHeight(peer.ID()) >= height &&
@@ -521,7 +519,7 @@ func (r *BlockBroadcastReactor) hasSentToPeer(peerID p2p.ID, hash common.Hash) b
 func (r *BlockBroadcastReactor) gossipBlock(block *BlockV2, fromPeer p2p.ID) {
 	r.logger.Info("Gossiping block", "number", block.Number, "hash", block.Hash.Hex(), "fromPeer", fromPeer)
 	msg := &bcproto.BlockResponseV2{
-		Block: BlockV2ToProto(block),
+		Block: types.BlockV2ToProto(block),
 	}
 	bz, err := encodeMsg(msg)
 	if err != nil {
@@ -659,7 +657,7 @@ func (r *BlockBroadcastReactor) onBlockRequest(msg *bcproto.BlockRequest, src p2
 	}
 
 	resp := &bcproto.BlockResponseV2{
-		Block: BlockV2ToProto(block),
+		Block: types.BlockV2ToProto(block),
 	}
 	bz, err := encodeMsg(resp)
 	if err != nil {
@@ -672,7 +670,7 @@ func (r *BlockBroadcastReactor) onBlockRequest(msg *bcproto.BlockRequest, src p2
 // broadcast only for sequencer
 func (r *BlockBroadcastReactor) broadcast(block *BlockV2) {
 	resp := &bcproto.BlockResponseV2{
-		Block: BlockV2ToProto(block),
+		Block: types.BlockV2ToProto(block),
 	}
 	bz, err := encodeMsg(resp)
 	if err != nil {
@@ -683,57 +681,6 @@ func (r *BlockBroadcastReactor) broadcast(block *BlockV2) {
 	r.logger.Info("Broadcast block", "number", block.Number, "hash", block.Hash.Hex())
 }
 
-// ============================================================================
-// Proto Conversion
-// ============================================================================
-
-func BlockV2ToProto(block *BlockV2) *seqproto.BlockV2 {
-	var baseFee []byte
-	if block.BaseFee != nil {
-		baseFee = block.BaseFee.Bytes()
-	}
-	return &seqproto.BlockV2{
-		ParentHash:         block.ParentHash.Bytes(),
-		Miner:              block.Miner.Bytes(),
-		Number:             block.Number,
-		GasLimit:           block.GasLimit,
-		BaseFee:            baseFee,
-		Timestamp:          block.Timestamp,
-		Transactions:       block.Transactions,
-		StateRoot:          block.StateRoot.Bytes(),
-		GasUsed:            block.GasUsed,
-		ReceiptRoot:        block.ReceiptRoot.Bytes(),
-		LogsBloom:          block.LogsBloom,
-		WithdrawTrieRoot:   block.WithdrawTrieRoot.Bytes(),
-		NextL1MessageIndex: block.NextL1MessageIndex,
-		Hash:               block.Hash.Bytes(),
-		Signature:          block.Signature,
-	}
-}
-
-func ProtoToBlockV2(pb *seqproto.BlockV2) *BlockV2 {
-	baseFee := new(big.Int)
-	if len(pb.BaseFee) > 0 {
-		baseFee.SetBytes(pb.BaseFee)
-	}
-	return &BlockV2{
-		ParentHash:         common.BytesToHash(pb.ParentHash),
-		Miner:              common.BytesToAddress(pb.Miner),
-		Number:             pb.Number,
-		GasLimit:           pb.GasLimit,
-		BaseFee:            baseFee,
-		Timestamp:          pb.Timestamp,
-		Transactions:       pb.Transactions,
-		StateRoot:          common.BytesToHash(pb.StateRoot),
-		GasUsed:            pb.GasUsed,
-		ReceiptRoot:        common.BytesToHash(pb.ReceiptRoot),
-		LogsBloom:          pb.LogsBloom,
-		WithdrawTrieRoot:   common.BytesToHash(pb.WithdrawTrieRoot),
-		NextL1MessageIndex: pb.NextL1MessageIndex,
-		Hash:               common.BytesToHash(pb.Hash),
-		Signature:          pb.Signature,
-	}
-}
 
 // ==================== Message Encoding/Decoding ====================
 // Local copies to avoid import cycle with blocksync package
