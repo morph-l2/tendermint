@@ -133,8 +133,9 @@ func startNode(cfg *Config) error {
 		node.DefaultDBProvider,
 		node.DefaultMetricsProvider(tmcfg.Instrumentation),
 		nodeLogger,
-		nil,
-		nil,
+		nil, // sequencerVerifier
+		nil, // sequencerSigner
+		nil, // ha: no HA in e2e test node
 	)
 	if err != nil {
 		return err

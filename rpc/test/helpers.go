@@ -178,8 +178,9 @@ func NewTendermint(app abci.Application, opts *Options) *nm.Node {
 		nm.DefaultDBProvider,
 		nm.DefaultMetricsProvider(config.Instrumentation),
 		logger,
-		nil,
-		nil,
+		nil, // sequencerVerifier
+		nil, // sequencerSigner
+		nil, // ha: no HA in RPC test node
 	)
 	if err != nil {
 		panic(err)
