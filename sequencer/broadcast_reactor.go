@@ -267,12 +267,13 @@ func (r *BlockBroadcastReactor) broadcastRoutine() {
 		case <-r.Quit():
 			return
 		case block := <-source:
-			// HA Follower: consume channel but do not broadcast.
-			// When promoted to Leader, the next block automatically starts broadcasting.
+			// Always populate recentBlocks so the cache is warm if this follower
+			// is promoted to leader and starts serving block requests from fullnodes.
+			r.recentBlocks.Add(block)
+			// HA Follower: do not broadcast, only drain the channel.
 			if r.stateV2.IsHAMode() && !r.stateV2.IsHALeader() {
 				continue
 			}
-			r.recentBlocks.Add(block)
 			r.broadcast(block)
 		}
 	}
@@ -478,14 +479,9 @@ func (r *BlockBroadcastReactor) applyBlock(block *BlockV2) error {
 		return fmt.Errorf("parent mismatch")
 	}
 
-	// Update state via stateV2 (unified entry point)
+	// ApplyBlock handles geth apply + SaveSignature in one call.
 	if err := r.stateV2.ApplyBlock(block); err != nil {
 		return err
-	}
-
-	// Persist signature for historical block serving
-	if err := r.sigStore.SaveSignature(block.Hash, block.Signature); err != nil {
-		panic(fmt.Sprintf("failed to save signature at height %d: %v", block.Number, err))
 	}
 
 	// Add to recent blocks

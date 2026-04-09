@@ -239,17 +239,12 @@ func TestBlockRingBuffer_RollbackTo_All(t *testing.T) {
 		rb.Add(makeBlock(i, byte(i)))
 	}
 
-	// Rollback to before first block
+	// Rollback to before first block — removes all blocks with h > 99
 	rb.RollbackTo(99)
 
-	// All blocks removed, but minHeight stays at 100
-	// (rollbackTo only removes > targetHeight)
-	assert.Equal(t, 1, rb.Count()) // Block 100 remains (not > 99, it's == 100)
-
-	// Actually let's re-read the logic... rollbackTo removes h > targetHeight
-	// So rollbackTo(99) removes 100, 101, 102, 103, 104
-	// Wait, the loop is: for h := rb.maxHeight; h > targetHeight; h--
-	// So it removes 104, 103, 102, 101, 100 (all > 99)
+	// rollbackTo loop: for h := rb.maxHeight; h > targetHeight; h--
+	// removes 104, 103, 102, 101, 100 (all > 99)
+	assert.Equal(t, 0, rb.Count())
 }
 
 func TestBlockRingBuffer_RollbackTo_All_Correct(t *testing.T) {

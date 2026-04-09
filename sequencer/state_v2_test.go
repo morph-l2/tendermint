@@ -3,7 +3,6 @@ package sequencer
 import (
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/morph-l2/go-ethereum/common"
 	"github.com/tendermint/tendermint/l2node"
@@ -64,10 +63,13 @@ func newMockSequencerHA(leader bool) *mockSequencerHA {
 	}
 }
 
-func (m *mockSequencerHA) IsLeader() bool             { return m.leader }
-func (m *mockSequencerHA) Join() error                 { return nil }
-func (m *mockSequencerHA) Commit(block *BlockV2) error { return m.commitErr }
-func (m *mockSequencerHA) Subscribe() <-chan *BlockV2  { return m.subCh }
+func (m *mockSequencerHA) Start() error                          { return nil }
+func (m *mockSequencerHA) Stop()                                 {}
+func (m *mockSequencerHA) IsLeader() bool                        { return m.leader }
+func (m *mockSequencerHA) Join() error                           { return nil }
+func (m *mockSequencerHA) Commit(block *BlockV2) error           { return m.commitErr }
+func (m *mockSequencerHA) Subscribe() <-chan *BlockV2             { return m.subCh }
+func (m *mockSequencerHA) SetOnBlockApplied(fn func(*BlockV2) error) {}
 
 // newTestMockL2Node creates a mock L2Node for testing.
 func newTestMockL2Node() l2node.L2Node {
@@ -82,7 +84,7 @@ func TestStateV2_NewStateV2(t *testing.T) {
 	mockL2Node := newTestMockL2Node()
 	logger := log.NewNopLogger()
 
-	stateV2, err := NewStateV2(mockL2Node, time.Second, logger, &mockSequencerVerifier{}, nil, nil, nil)
+	stateV2, err := NewStateV2(mockL2Node, logger, &mockSequencerVerifier{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewStateV2 failed: %v", err)
 	}
@@ -95,7 +97,7 @@ func TestStateV2_LatestHeight(t *testing.T) {
 	mockL2Node := newTestMockL2Node()
 	logger := log.NewNopLogger()
 
-	stateV2, err := NewStateV2(mockL2Node, time.Second, logger, &mockSequencerVerifier{}, nil, nil, nil)
+	stateV2, err := NewStateV2(mockL2Node, logger, &mockSequencerVerifier{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewStateV2 failed: %v", err)
 	}
@@ -112,13 +114,13 @@ func TestStateV2_HasSigner_MatchesIsSequencerMode(t *testing.T) {
 	mockVerifier := &mockSequencerVerifier{}
 
 	// Without signer
-	s1, _ := NewStateV2(mockL2Node, time.Second, logger, mockVerifier, nil, nil, nil)
+	s1, _ := NewStateV2(mockL2Node, logger, mockVerifier, nil, nil, nil)
 	if s1.HasSigner() || s1.IsSequencerMode() {
 		t.Error("should be false when signer is nil")
 	}
 
 	// With signer
-	s2, _ := NewStateV2(mockL2Node, time.Second, logger, mockVerifier, &mockSignerImpl{}, nil, nil)
+	s2, _ := NewStateV2(mockL2Node, logger, mockVerifier, &mockSignerImpl{}, nil, nil)
 	if !s2.HasSigner() || !s2.IsSequencerMode() {
 		t.Error("should be true when signer is provided")
 	}
@@ -131,7 +133,7 @@ func TestStateV2_SignBlock(t *testing.T) {
 	mockSigner := &mockSignerImpl{signature: make([]byte, 65)}
 	mockVerifier := &mockSequencerVerifier{}
 
-	stateV2, err := NewStateV2(mockL2Node, time.Second, logger, mockVerifier, mockSigner, nil, nil)
+	stateV2, err := NewStateV2(mockL2Node, logger, mockVerifier, mockSigner, nil, nil)
 	if err != nil {
 		t.Fatalf("NewStateV2 failed: %v", err)
 	}
@@ -153,7 +155,7 @@ func TestStateV2_SignBlockWithoutSigner(t *testing.T) {
 	mockL2Node := newTestMockL2Node()
 	logger := log.NewNopLogger()
 
-	stateV2, err := NewStateV2(mockL2Node, time.Second, logger, &mockSequencerVerifier{}, nil, nil, nil)
+	stateV2, err := NewStateV2(mockL2Node, logger, &mockSequencerVerifier{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewStateV2 failed: %v", err)
 	}
@@ -173,14 +175,14 @@ func TestNewStateV2_VerifierRequired(t *testing.T) {
 	logger := log.NewNopLogger()
 
 	// verifier==nil should fail
-	_, err := NewStateV2(mockL2Node, time.Second, logger, nil, nil, nil, nil)
+	_, err := NewStateV2(mockL2Node, logger, nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error when verifier is nil")
 	}
 
 	// with signer, still fails without verifier
 	mockSigner := &mockSignerImpl{}
-	_, err = NewStateV2(mockL2Node, time.Second, logger, nil, mockSigner, nil, nil)
+	_, err = NewStateV2(mockL2Node, logger, nil, mockSigner, nil, nil)
 	if err == nil {
 		t.Fatal("expected error when verifier is nil (with signer)")
 	}
@@ -193,7 +195,7 @@ func TestNewStateV2_WithHA(t *testing.T) {
 	mockVerifier := &mockSequencerVerifier{}
 	ha := newMockSequencerHA(true)
 
-	stateV2, err := NewStateV2(mockL2Node, time.Second, logger, mockVerifier, mockSigner, nil, ha)
+	stateV2, err := NewStateV2(mockL2Node, logger, mockVerifier, mockSigner, nil, ha)
 	if err != nil {
 		t.Fatalf("NewStateV2 failed: %v", err)
 	}
@@ -210,14 +212,14 @@ func TestStateV2_HasSigner(t *testing.T) {
 	mockL2Node := newTestMockL2Node()
 	logger := log.NewNopLogger()
 
-	fullnode, _ := NewStateV2(mockL2Node, time.Second, logger, &mockSequencerVerifier{}, nil, nil, nil)
+	fullnode, _ := NewStateV2(mockL2Node, logger, &mockSequencerVerifier{}, nil, nil, nil)
 	if fullnode.HasSigner() {
 		t.Error("Fullnode should not have signer")
 	}
 
 	mockSigner := &mockSignerImpl{}
 	mockVerifier := &mockSequencerVerifier{}
-	seqNode, _ := NewStateV2(mockL2Node, time.Second, logger, mockVerifier, mockSigner, nil, nil)
+	seqNode, _ := NewStateV2(mockL2Node, logger, mockVerifier, mockSigner, nil, nil)
 	if !seqNode.HasSigner() {
 		t.Error("Sequencer node should have signer")
 	}
@@ -230,13 +232,13 @@ func TestStateV2_IsHAMode(t *testing.T) {
 	mockVerifier := &mockSequencerVerifier{}
 
 	// Non-HA
-	nonHA, _ := NewStateV2(mockL2Node, time.Second, logger, mockVerifier, mockSigner, nil, nil)
+	nonHA, _ := NewStateV2(mockL2Node, logger, mockVerifier, mockSigner, nil, nil)
 	if nonHA.IsHAMode() {
 		t.Error("IsHAMode should be false without ha")
 	}
 
 	// HA
-	ha, _ := NewStateV2(mockL2Node, time.Second, logger, mockVerifier, mockSigner, nil, newMockSequencerHA(false))
+	ha, _ := NewStateV2(mockL2Node, logger, mockVerifier, mockSigner, nil, newMockSequencerHA(false))
 	if !ha.IsHAMode() {
 		t.Error("IsHAMode should be true with ha")
 	}
@@ -249,19 +251,19 @@ func TestStateV2_IsHALeader(t *testing.T) {
 	mockVerifier := &mockSequencerVerifier{}
 
 	// Non-HA: never leader
-	nonHA, _ := NewStateV2(mockL2Node, time.Second, logger, mockVerifier, mockSigner, nil, nil)
+	nonHA, _ := NewStateV2(mockL2Node, logger, mockVerifier, mockSigner, nil, nil)
 	if nonHA.IsHALeader() {
 		t.Error("non-HA node should not be HA leader")
 	}
 
 	// HA follower
-	follower, _ := NewStateV2(mockL2Node, time.Second, logger, mockVerifier, mockSigner, nil, newMockSequencerHA(false))
+	follower, _ := NewStateV2(mockL2Node, logger, mockVerifier, mockSigner, nil, newMockSequencerHA(false))
 	if follower.IsHALeader() {
 		t.Error("HA follower should not be leader")
 	}
 
 	// HA leader
-	leader, _ := NewStateV2(mockL2Node, time.Second, logger, mockVerifier, mockSigner, nil, newMockSequencerHA(true))
+	leader, _ := NewStateV2(mockL2Node, logger, mockVerifier, mockSigner, nil, newMockSequencerHA(true))
 	if !leader.IsHALeader() {
 		t.Error("HA leader should be leader")
 	}
@@ -277,7 +279,7 @@ func TestStateV2_IsActiveSequencer_NonHA_Active(t *testing.T) {
 	mockSigner := &mockSignerImpl{address: common.HexToAddress("0x1")}
 	mockVerifier := &mockSequencerVerifier{isSequencer: true}
 
-	s, _ := NewStateV2(mockL2Node, time.Second, logger, mockVerifier, mockSigner, nil, nil)
+	s, _ := NewStateV2(mockL2Node, logger, mockVerifier, mockSigner, nil, nil)
 	s.latestBlock = &BlockV2{Number: 0}
 
 	if !s.isActiveSequencer() {
@@ -291,7 +293,7 @@ func TestStateV2_IsActiveSequencer_NonHA_Inactive(t *testing.T) {
 	mockSigner := &mockSignerImpl{address: common.HexToAddress("0x1")}
 	mockVerifier := &mockSequencerVerifier{isSequencer: false}
 
-	s, _ := NewStateV2(mockL2Node, time.Second, logger, mockVerifier, mockSigner, nil, nil)
+	s, _ := NewStateV2(mockL2Node, logger, mockVerifier, mockSigner, nil, nil)
 	s.latestBlock = &BlockV2{Number: 0}
 
 	if s.isActiveSequencer() {
@@ -306,7 +308,7 @@ func TestStateV2_IsActiveSequencer_HA_Leader(t *testing.T) {
 	mockVerifier := &mockSequencerVerifier{isSequencer: true}
 	ha := newMockSequencerHA(true)
 
-	s, _ := NewStateV2(mockL2Node, time.Second, logger, mockVerifier, mockSigner, nil, ha)
+	s, _ := NewStateV2(mockL2Node, logger, mockVerifier, mockSigner, nil, ha)
 	s.latestBlock = &BlockV2{Number: 0}
 
 	if !s.isActiveSequencer() {
@@ -321,7 +323,7 @@ func TestStateV2_IsActiveSequencer_HA_Follower(t *testing.T) {
 	mockVerifier := &mockSequencerVerifier{isSequencer: true} // L1 says active
 	ha := newMockSequencerHA(false)                           // but not leader
 
-	s, _ := NewStateV2(mockL2Node, time.Second, logger, mockVerifier, mockSigner, nil, ha)
+	s, _ := NewStateV2(mockL2Node, logger, mockVerifier, mockSigner, nil, ha)
 	s.latestBlock = &BlockV2{Number: 0}
 
 	if s.isActiveSequencer() {
@@ -335,7 +337,7 @@ func TestStateV2_IsActiveSequencer_VerifierError(t *testing.T) {
 	mockSigner := &mockSignerImpl{}
 	mockVerifier := &mockSequencerVerifier{err: errors.New("rpc error")}
 
-	s, _ := NewStateV2(mockL2Node, time.Second, logger, mockVerifier, mockSigner, nil, nil)
+	s, _ := NewStateV2(mockL2Node, logger, mockVerifier, mockSigner, nil, nil)
 	s.latestBlock = &BlockV2{Number: 0}
 
 	if s.isActiveSequencer() {
@@ -351,8 +353,8 @@ func TestStateV2_ApplyBlock_Idempotent(t *testing.T) {
 	mockL2Node := newTestMockL2Node()
 	logger := log.NewNopLogger()
 
-	s, _ := NewStateV2(mockL2Node, time.Second, logger, &mockSequencerVerifier{}, nil, nil, nil)
-	block := &types.BlockV2{Number: 1}
+	s, _ := NewStateV2(mockL2Node, logger, &mockSequencerVerifier{}, nil, nil, nil)
+	block := &types.BlockV2{Number: 1, Signature: []byte{0x01, 0x02, 0x03}}
 
 	// Apply twice should not error
 	if err := s.ApplyBlock(block); err != nil {
@@ -370,10 +372,10 @@ func TestStateV2_ApplyBlock_OlderBlockSkipped(t *testing.T) {
 	mockL2Node := newTestMockL2Node()
 	logger := log.NewNopLogger()
 
-	s, _ := NewStateV2(mockL2Node, time.Second, logger, &mockSequencerVerifier{}, nil, nil, nil)
+	s, _ := NewStateV2(mockL2Node, logger, &mockSequencerVerifier{}, nil, nil, nil)
 
-	block2 := &types.BlockV2{Number: 2}
-	block1 := &types.BlockV2{Number: 1}
+	block2 := &types.BlockV2{Number: 2, Signature: []byte{0x01, 0x02, 0x03}}
+	block1 := &types.BlockV2{Number: 1, Signature: []byte{0x01, 0x02, 0x03}}
 
 	if err := s.ApplyBlock(block2); err != nil {
 		t.Fatalf("apply block2 failed: %v", err)
@@ -392,10 +394,10 @@ func TestStateV2_ApplyBlock_Sequential(t *testing.T) {
 	mockL2Node := newTestMockL2Node()
 	logger := log.NewNopLogger()
 
-	s, _ := NewStateV2(mockL2Node, time.Second, logger, &mockSequencerVerifier{}, nil, nil, nil)
+	s, _ := NewStateV2(mockL2Node, logger, &mockSequencerVerifier{}, nil, nil, nil)
 
 	for i := uint64(1); i <= 5; i++ {
-		block := &types.BlockV2{Number: i}
+		block := &types.BlockV2{Number: i, Signature: []byte{0x01, 0x02, 0x03}}
 		if err := s.ApplyBlock(block); err != nil {
 			t.Fatalf("apply block %d failed: %v", i, err)
 		}

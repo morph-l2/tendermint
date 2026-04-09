@@ -123,8 +123,9 @@ func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
 		DefaultDBProvider,
 		DefaultMetricsProvider(config.Instrumentation),
 		logger,
-		nil,
-		nil,
+		nil, // sequencerVerifier
+		nil, // sequencerSigner
+		nil, // ha: no HA in default node
 	)
 }
 
@@ -250,6 +251,8 @@ type Node struct {
 	// Sequencer mode (after upgrade)
 	stateV2               *sequencer.StateV2
 	blockBroadcastReactor *sequencer.BlockBroadcastReactor
+	sigStore              *sequencer.SignatureStore
+	ha                    sequencer.SequencerHA
 }
 
 func initDBs(config *cfg.Config, dbProvider DBProvider) (blockStore *store.BlockStore, stateDB dbm.DB, sigStore *sequencer.SignatureStore, err error) {
@@ -523,7 +526,6 @@ func createSequencerComponents(
 	// Create StateV2
 	stateV2, err := sequencer.NewStateV2(
 		l2Node,
-		sequencer.DefaultBlockInterval,
 		logger,
 		verifier,
 		signer,
@@ -798,6 +800,7 @@ func NewNode(
 	logger log.Logger,
 	sequencerVerifier sequencer.SequencerVerifier,
 	sequencerSigner sequencer.Signer,
+	ha sequencer.SequencerHA,
 	options ...Option,
 ) (
 	*Node, error,
@@ -1014,6 +1017,8 @@ func NewNode(
 		indexerService:   indexerService,
 		blockIndexer:     blockIndexer,
 		eventBus:         eventBus,
+		sigStore:         sigStore,
+		ha:               ha,
 	}
 	node.BaseService = *service.NewBaseService(logger, "Node", node)
 
@@ -1030,9 +1035,14 @@ func NewNode(
 			sequencerVerifier,
 			sequencerSigner,
 			sigStore,
-			nil, // ha: nil for now, Raft HA will be injected in a future milestone
+			ha, // HA service injected from NewNode caller; nil disables HA mode
 		); err != nil {
 			return nil, err
+		}
+
+		// Wire HA FSM callback: ApplyBlock handles geth apply + SaveSignature.
+		if ha != nil {
+			ha.SetOnBlockApplied(node.stateV2.ApplyBlock)
 		}
 
 		// Set stateV2&verifier&sigStore on blocksync reactor for post-upgrade

@@ -34,6 +34,17 @@ type Signer interface {
 // SequencerHA is the abstraction for Raft HA cluster.
 // In single-node mode, ha == nil and all HA-related logic is skipped.
 type SequencerHA interface {
+	// Start initializes and starts the Raft service.
+	// leader (bootstrap=true): starts as a single-node cluster, immediately becomes Leader.
+	// follower (bootstrap=false): initializes Raft, then asynchronously retries Join() in the
+	//   background until it successfully joins the cluster or the service is stopped.
+	// Called by StateV2.OnStart() when the upgrade height is reached.
+	Start() error
+
+	// Stop gracefully shuts down the Raft service.
+	// Called by StateV2.OnStop() when the upgrade height has been passed.
+	Stop()
+
 	// IsLeader returns whether the current node is the Raft leader (sole block producer).
 	IsLeader() bool
 
@@ -52,4 +63,9 @@ type SequencerHA interface {
 	// Subscribe returns a channel that delivers blocks after Raft commit.
 	// Both leader and follower subscribe; used by broadcastRoutine for P2P broadcast.
 	Subscribe() <-chan *BlockV2
+
+	// SetOnBlockApplied registers the callback invoked by the Raft FSM on every
+	// committed log entry. The callback should execute ApplyBlock + SaveSignature.
+	// Must be called before Start().
+	SetOnBlockApplied(fn func(*BlockV2) error)
 }
