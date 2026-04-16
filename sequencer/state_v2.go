@@ -131,6 +131,7 @@ func (s *StateV2) OnStop() {
 	}
 }
 
+
 // roleCheckRoutine is the unified loop for role detection and block production.
 // It runs for all nodes with a signer (ActiveSequencer, HA-Leader, HA-Follower).
 //
@@ -315,53 +316,44 @@ func (s *StateV2) signBlock(block *BlockV2) error {
 	return nil
 }
 
-// ApplyBlock applies a block to L2 and updates local state.
-// Serialized by mutex to prevent concurrent application.
-//
-// Reorg detection: when block.Number <= latestBlock.Number, we check if the
-// existing block at that height has the same hash. If yes, it's already on-chain
-// (idempotent skip). If not, it's a reorg — fall through to ApplyBlockV2 and
-// let geth handle the chain reorganization.
+// ApplyBlock saves the block signature and delegates to l2Node.ApplyBlockV2.
+// Reorg detection and idempotent checks are handled in the Executor layer.
 func (s *StateV2) ApplyBlock(block *BlockV2) error {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
-
-	if s.latestBlock != nil && block.Number <= s.latestBlock.Number {
-		existing, err := s.l2Node.GetBlockByNumber(block.Number)
-		if err != nil {
-			return fmt.Errorf("ApplyBlock: GetBlockByNumber(%d): %w", block.Number, err)
-		}
-		if existing != nil && existing.Hash == block.Hash {
-			s.logger.Debug("ApplyBlock: idempotent skip", "height", block.Number)
-			return nil // already on-chain, idempotent skip
-		}
-		// Hash mismatch → reorg, fall through to ApplyBlockV2
-	}
 
 	if len(block.Signature) == 0 {
 		return fmt.Errorf("ApplyBlock: block %d missing signature", block.Number)
 	}
 
-	tGeth := time.Now()
-	if err := s.l2Node.ApplyBlockV2(block); err != nil {
-		return err
-	}
-	gethDur := time.Since(tGeth)
-
-	s.latestBlock = block
-
+	// Save signature BEFORE applying to geth. If crash happens after Apply
+	// but before SaveSignature, the block is on-chain but its signature is
+	// lost — which can cause P2P peers to reject/disconnect when they cannot
+	// verify the block. Saving first at worst leaves an orphan signature if
+	// Apply fails, which is harmless.
 	tSig := time.Now()
 	if err := s.sigStore.SaveSignature(block.Hash, block.Signature); err != nil {
 		return err
 	}
 	sigDur := time.Since(tSig)
 
+	tGeth := time.Now()
+	applied, err := s.l2Node.ApplyBlockV2(block)
+	if err != nil {
+		return err
+	}
+	gethDur := time.Since(tGeth)
+
+	if applied {
+		s.latestBlock = block
+	}
+
 	s.logger.Debug("[PERF] ApplyBlock",
 		"height", block.Number,
 		"txCount", len(block.Transactions),
 		"gasUsed", block.GasUsed,
-		"geth_ms", float64(gethDur.Microseconds())/1000.0,
 		"sigSave_ms", float64(sigDur.Microseconds())/1000.0,
+		"geth_ms", float64(gethDur.Microseconds())/1000.0,
 		"total_ms", float64((gethDur+sigDur).Microseconds())/1000.0,
 	)
 
