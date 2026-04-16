@@ -15,6 +15,7 @@ var _ L2Node = &MockL2Node{}
 type MockL2Node struct {
 	TxNumber         int
 	ValidatorSetFile string // used to control the validator set updates
+	maxAppliedHeight uint64 // tracks highest block applied (for V2 idempotent check)
 }
 
 func NewMockL2Node(n int, validatorSetFile string) L2Node {
@@ -139,9 +140,12 @@ func (l *MockL2Node) RequestBlockDataV2(parentHash []byte) (*BlockV2, bool, erro
 	}, false, nil
 }
 
-func (l *MockL2Node) ApplyBlockV2(block *BlockV2) error {
-	// Mock implementation: do nothing
-	return nil
+func (l *MockL2Node) ApplyBlockV2(block *BlockV2) (bool, error) {
+	if block.Number <= l.maxAppliedHeight {
+		return false, nil // idempotent skip
+	}
+	l.maxAppliedHeight = block.Number
+	return true, nil
 }
 
 func (l *MockL2Node) GetBlockByNumber(height uint64) (*BlockV2, error) {
