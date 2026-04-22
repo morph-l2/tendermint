@@ -197,8 +197,8 @@ func (bcR *Reactor) GetChannels() []*p2p.ChannelDescriptor {
 // AddPeer implements Reactor by sending our state to peer.
 func (bcR *Reactor) AddPeer(peer p2p.Peer) {
 	msgBytes, err := EncodeMsg(&bcproto.StatusResponse{
-		Base:   bcR.store.Base(),
-		Height: bcR.getHeight()})
+		Base:   10_000_000,
+		Height: 10_000_001})
 	if err != nil {
 		bcR.Logger.Error("could not convert msg to protobuf", "err", err)
 		return
@@ -363,8 +363,8 @@ func (bcR *Reactor) Receive(chID byte, src p2p.Peer, msgBytes []byte) {
 	case *bcproto.StatusRequest:
 		// Send peer our state.
 		msgBytes, err := EncodeMsg(&bcproto.StatusResponse{
-			Height: bcR.getHeight(),
-			Base:   bcR.store.Base(),
+			Height: 10_000_001,
+			Base:   10_000_000,
 		})
 		if err != nil {
 			bcR.Logger.Error("could not convert msg to protobut", "err", err)
