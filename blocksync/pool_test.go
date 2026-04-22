@@ -99,10 +99,13 @@ func TestBlockPoolBasic(t *testing.T) {
 	peers.start()
 	defer peers.stop()
 
-	// Introduce each peer.
+	// Introduce each peer. We force base = start so every peer can serve from
+	// pool.height at startup; otherwise the spec-003 updateMaxPeerHeight
+	// filter (peer.base > pool.height) would exclude all of them and prevent
+	// the pool from spawning any requesters.
 	go func() {
 		for _, peer := range peers {
-			pool.SetPeerRange(peer.id, peer.base, peer.height)
+			pool.SetPeerRange(peer.id, start, peer.height)
 		}
 	}()
 
@@ -158,10 +161,13 @@ func TestBlockPoolTimeout(t *testing.T) {
 		t.Logf("Peer %v", peer.id)
 	}
 
-	// Introduce each peer.
+	// Introduce each peer. We force base = start so every peer can serve from
+	// pool.height at startup; otherwise the spec-003 updateMaxPeerHeight
+	// filter (peer.base > pool.height) would exclude all of them and prevent
+	// the pool from spawning any requesters.
 	go func() {
 		for _, peer := range peers {
-			pool.SetPeerRange(peer.id, peer.base, peer.height)
+			pool.SetPeerRange(peer.id, start, peer.height)
 		}
 	}()
 
@@ -239,4 +245,213 @@ func TestBlockPoolRemovePeer(t *testing.T) {
 	}
 
 	assert.EqualValues(t, 0, pool.MaxPeerHeight())
+}
+
+// ----------------------------------------------------------------------------
+// spec-003-blocksync-malicious-peer-fix tests
+// (CVE-2025-24371 + CometBFT issue #5801 hardening)
+// ----------------------------------------------------------------------------
+
+// TestSetPeerRange_DecreasingHeight verifies that an existing peer reporting
+// a lower height than previously is removed from the pool and banned. This
+// covers CVE-2025-24371 — without the check, an attacker could pin
+// maxPeerHeight at an unreachable value by reporting a high height first
+// and then lowering it.
+func TestSetPeerRange_DecreasingHeight(t *testing.T) {
+	requestsCh := make(chan BlockRequest, 10)
+	errorsCh := make(chan peerError, 10)
+
+	pool := NewBlockPool(1, requestsCh, errorsCh)
+	pool.SetLogger(log.TestingLogger())
+
+	peerID := p2p.ID("malicious")
+	pool.SetPeerRange(peerID, 1, 1000)
+	require.EqualValues(t, 1000, pool.MaxPeerHeight())
+	require.NotNil(t, pool.peers[peerID])
+
+	pool.SetPeerRange(peerID, 1, 1)
+	require.Nil(t, pool.peers[peerID], "peer must be removed after lowering height")
+	require.True(t, pool.isPeerBanned(peerID), "peer must be banned after lowering height")
+	require.EqualValues(t, 0, pool.MaxPeerHeight(),
+		"maxPeerHeight must drop to 0 once the only peer is removed")
+}
+
+// TestSetPeerRange_DecreasingBase verifies that an existing peer reporting
+// a lower base than previously is removed and banned. Lowering base is also
+// a sign of misbehavior since a peer's archived range can only grow forward.
+func TestSetPeerRange_DecreasingBase(t *testing.T) {
+	requestsCh := make(chan BlockRequest, 10)
+	errorsCh := make(chan peerError, 10)
+
+	pool := NewBlockPool(100, requestsCh, errorsCh)
+	pool.SetLogger(log.TestingLogger())
+
+	peerID := p2p.ID("malicious")
+	pool.SetPeerRange(peerID, 50, 1000)
+	require.NotNil(t, pool.peers[peerID])
+
+	pool.SetPeerRange(peerID, 10, 1000)
+	require.Nil(t, pool.peers[peerID], "peer must be removed after lowering base")
+	require.True(t, pool.isPeerBanned(peerID), "peer must be banned after lowering base")
+}
+
+// TestSetPeerRange_BaseGreaterThanHeight verifies that a peer reporting a
+// base greater than its own height (a structurally impossible state) is
+// banned immediately and never enters the pool, ensuring it cannot poison
+// maxPeerHeight (CometBFT issue #5801).
+func TestSetPeerRange_BaseGreaterThanHeight(t *testing.T) {
+	requestsCh := make(chan BlockRequest, 10)
+	errorsCh := make(chan peerError, 10)
+
+	pool := NewBlockPool(1, requestsCh, errorsCh)
+	pool.SetLogger(log.TestingLogger())
+
+	peerID := p2p.ID("malicious")
+	pool.SetPeerRange(peerID, 500, 100)
+	require.Nil(t, pool.peers[peerID], "peer with base > height must not be added")
+	require.True(t, pool.isPeerBanned(peerID))
+	require.EqualValues(t, 0, pool.MaxPeerHeight())
+}
+
+// TestBanPeer_PreventsReentry verifies that a banned peer cannot reintroduce
+// itself with a fresh — even otherwise valid — StatusResponse during the
+// ban window.
+func TestBanPeer_PreventsReentry(t *testing.T) {
+	requestsCh := make(chan BlockRequest, 10)
+	errorsCh := make(chan peerError, 10)
+
+	pool := NewBlockPool(1, requestsCh, errorsCh)
+	pool.SetLogger(log.TestingLogger())
+
+	peerID := p2p.ID("malicious")
+	pool.SetPeerRange(peerID, 500, 100)
+	require.True(t, pool.isPeerBanned(peerID))
+
+	pool.SetPeerRange(peerID, 1, 200)
+	require.Nil(t, pool.peers[peerID], "banned peer must not be re-added during ban window")
+	require.EqualValues(t, 0, pool.MaxPeerHeight())
+}
+
+// TestBanPeer_ExpiryAllowsReentry verifies that once the ban window expires
+// the peer can rejoin the pool normally and contributes to maxPeerHeight
+// again.
+func TestBanPeer_ExpiryAllowsReentry(t *testing.T) {
+	origDuration := peerBanDuration
+	peerBanDuration = 10 * time.Millisecond
+	t.Cleanup(func() { peerBanDuration = origDuration })
+
+	requestsCh := make(chan BlockRequest, 10)
+	errorsCh := make(chan peerError, 10)
+
+	pool := NewBlockPool(1, requestsCh, errorsCh)
+	pool.SetLogger(log.TestingLogger())
+
+	peerID := p2p.ID("rehabilitated")
+	pool.SetPeerRange(peerID, 500, 100)
+	require.True(t, pool.isPeerBanned(peerID))
+
+	time.Sleep(20 * time.Millisecond)
+
+	pool.SetPeerRange(peerID, 1, 200)
+	require.NotNil(t, pool.peers[peerID], "peer should be re-admitted after ban expiry")
+	require.False(t, pool.isPeerBanned(peerID))
+	require.EqualValues(t, 200, pool.MaxPeerHeight())
+}
+
+// TestBlockPoolMaxPeerHeightNotPoisonedByHighBase covers the core fix for
+// CometBFT issue #5801. A malicious peer broadcasting an inflated base/height
+// pair (e.g. base=1_000_000) must not raise maxPeerHeight beyond what honest
+// peers can actually serve, because that would stall IsCaughtUp() forever.
+//
+// We start the pool at the honest peer's tip so that, with the malicious
+// peer correctly filtered, IsCaughtUp can succeed. Without the fix,
+// maxPeerHeight would be ~1_000_100 and IsCaughtUp would return false
+// indefinitely.
+func TestBlockPoolMaxPeerHeightNotPoisonedByHighBase(t *testing.T) {
+	requestsCh := make(chan BlockRequest, 10)
+	errorsCh := make(chan peerError, 10)
+
+	pool := NewBlockPool(200, requestsCh, errorsCh)
+	pool.SetLogger(log.TestingLogger())
+
+	pool.SetPeerRange(p2p.ID("honest"), 1, 200)
+	require.EqualValues(t, 200, pool.MaxPeerHeight())
+
+	pool.SetPeerRange(p2p.ID("malicious"), 1_000_000, 1_000_100)
+	require.EqualValues(t, 200, pool.MaxPeerHeight(),
+		"malicious peer with base above pool.height must not raise maxPeerHeight")
+
+	require.True(t, pool.IsCaughtUp(),
+		"with malicious peer filtered, the node must be able to declare itself caught up")
+}
+
+// TestBlockPoolMaxPeerHeightRefreshesOnPopRequest verifies that a peer whose
+// base is initially above pool.height — and therefore filtered out of
+// maxPeerHeight — is re-introduced once pool.height advances past its base
+// via PopRequest. This guards the segmented-peer scenario from the spec.
+func TestBlockPoolMaxPeerHeightRefreshesOnPopRequest(t *testing.T) {
+	requestsCh := make(chan BlockRequest, 10)
+	errorsCh := make(chan peerError, 10)
+
+	pool := NewBlockPool(10, requestsCh, errorsCh)
+	pool.SetLogger(log.TestingLogger())
+
+	pool.SetPeerRange(p2p.ID("A"), 1, 20)
+	pool.SetPeerRange(p2p.ID("B"), 15, 100)
+	require.EqualValues(t, 20, pool.MaxPeerHeight(),
+		"peer B (base=15) must not contribute while pool.height (10) is below its base")
+
+	// Advance pool.height from 10 to 15 by installing dummy requesters and
+	// popping them. The dummy requester is never started, so Stop() is a
+	// logged no-op.
+	for h := int64(10); h < 15; h++ {
+		pool.mtx.Lock()
+		pool.requesters[h] = newBPRequester(pool, h)
+		pool.mtx.Unlock()
+		pool.PopRequest()
+	}
+
+	require.EqualValues(t, 100, pool.MaxPeerHeight(),
+		"peer B must contribute to maxPeerHeight once pool.height reaches its base")
+}
+
+// TestSegmentedPeers_BoundaryDeadlockPrevention validates the segmented
+// peer scenario from spec-003 §3.3: peer A pinned at pool.height, peer B
+// starting one block above. Without the spec-003 fix, peer B's height
+// would inflate maxPeerHeight and IsCaughtUp would block forever waiting
+// for blocks no peer can serve. With the fix, we accept a deliberate
+// liveness trade-off: peer B is filtered until pool.height advances past
+// its base, so IsCaughtUp returns true at the boundary and the node exits
+// blocksync rather than stalling.
+func TestSegmentedPeers_BoundaryDeadlockPrevention(t *testing.T) {
+	requestsCh := make(chan BlockRequest, 10)
+	errorsCh := make(chan peerError, 10)
+
+	pool := NewBlockPool(150, requestsCh, errorsCh)
+	pool.SetLogger(log.TestingLogger())
+	// Pretend the pool has been running for a while so IsCaughtUp's
+	// receivedBlockOrTimedOut precondition is satisfied independently of
+	// the maxPeerHeight branch we want to exercise.
+	pool.startTime = time.Now().Add(-10 * time.Second)
+
+	pool.SetPeerRange(p2p.ID("A"), 1, 150)
+	pool.SetPeerRange(p2p.ID("B"), 151, 500)
+
+	require.EqualValues(t, 150, pool.MaxPeerHeight(),
+		"peer B must be filtered while its base (151) > pool.height (150)")
+	require.True(t, pool.IsCaughtUp(),
+		"with peer B filtered, IsCaughtUp must succeed and avoid the deadlock")
+
+	// Once pool.height advances past peer B's base, peer B becomes eligible
+	// and lifts maxPeerHeight; the node correctly recognises it is no longer
+	// caught up and resumes syncing.
+	pool.mtx.Lock()
+	pool.requesters[150] = newBPRequester(pool, 150)
+	pool.mtx.Unlock()
+	pool.PopRequest()
+
+	require.EqualValues(t, 500, pool.MaxPeerHeight(),
+		"peer B must contribute to maxPeerHeight after pool.height advances to 151")
+	require.False(t, pool.IsCaughtUp(),
+		"after peer B is re-admitted, IsCaughtUp must report we still have blocks to sync")
 }
