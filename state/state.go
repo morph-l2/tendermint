@@ -7,8 +7,6 @@ import (
 	"os"
 	"time"
 
-	tmbytes "github.com/tendermint/tendermint/libs/bytes"
-
 	"github.com/cosmos/gogoproto/proto"
 
 	tmstate "github.com/tendermint/tendermint/proto/tendermint/state"
@@ -240,7 +238,6 @@ func (state State) MakeBlock(
 	lastCommit *types.Commit,
 	evidence []types.Evidence,
 	proposerAddress []byte,
-	decideBatchPoint decideBatchPointFunc,
 ) *types.Block {
 
 	// Set time.
@@ -251,13 +248,10 @@ func (state State) MakeBlock(
 		timestamp = MedianTime(lastCommit, state.LastValidators)
 	}
 
-	var batchHash, batchHeader []byte
-	if decideBatchPoint != nil {
-		batchHash, batchHeader = decideBatchPoint(blockMeta, txs, height, timestamp)
-	}
-
-	// Build base block with block data.
-	block := types.MakeBlock(height, txs, blockMeta, batchHash, batchHeader, lastCommit, evidence)
+	// Build base block with block data. New blocks no longer carry batch data;
+	// the batchHash / batchHeader fields are retained on the wire (default nil)
+	// so historical block hashes remain byte-identical.
+	block := types.MakeBlock(height, txs, blockMeta, nil, nil, lastCommit, evidence)
 
 	// Fill rest of header with state data.
 	block.Header.Populate(
@@ -367,5 +361,3 @@ func MakeGenesisState(genDoc *types.GenesisDoc) (State, error) {
 		AppHash: genDoc.AppHash,
 	}, nil
 }
-
-type decideBatchPointFunc func(l2BlockMeta tmbytes.HexBytes, txs types.Txs, blockHeight int64, blockTime time.Time) ([]byte, []byte)

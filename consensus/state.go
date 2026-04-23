@@ -12,11 +12,8 @@ import (
 
 	"github.com/tendermint/tendermint/upgrade"
 
-	tmbytes "github.com/tendermint/tendermint/libs/bytes"
-
 	"github.com/cosmos/gogoproto/proto"
 
-	"github.com/tendermint/tendermint/blssignatures"
 	cfg "github.com/tendermint/tendermint/config"
 	cstypes "github.com/tendermint/tendermint/consensus/types"
 	"github.com/tendermint/tendermint/crypto"
@@ -42,7 +39,6 @@ var (
 	ErrInvalidProposalPOLRound    = errors.New("error invalid proposal POL round")
 	ErrAddingVote                 = errors.New("error adding vote")
 	ErrSignatureFoundInPastBlocks = errors.New("found signature from the same key")
-	ErrBLSSignatureInalvid        = errors.New("bls signature invalid")
 
 	errPubKeyIsNotSet = errors.New("pubkey is not set. Look for \"Can't get private validator pubkey\" errors")
 )
@@ -90,7 +86,6 @@ type State struct {
 	// config details
 	config        *cfg.ConsensusConfig
 	privValidator types.PrivValidator // for signing votes
-	blsPrivKey    *blssignatures.PrivateKey
 
 	// store blocks and commits
 	blockStore sm.BlockStore
@@ -112,9 +107,6 @@ type State struct {
 	// privValidator pubkey, memoized for the duration of one block
 	// to avoid extra requests to HSM
 	privValidatorPubKey crypto.PubKey
-
-	// batchCache caches the block info. since last batch point
-	batchCache *BatchCache
 
 	// state changes may be triggered by: msgs from peers,
 	// msgs from ourself, or by timeouts
@@ -296,13 +288,6 @@ func (cs *State) SetPrivValidator(priv types.PrivValidator) {
 	if err := cs.updatePrivValidatorPubKey(); err != nil {
 		cs.Logger.Error("failed to get private validator pubkey", "err", err)
 	}
-}
-
-func (cs *State) SetBLSPrivKey(bls *blssignatures.PrivateKey) {
-	cs.mtx.Lock()
-	defer cs.mtx.Unlock()
-
-	cs.blsPrivKey = bls
 }
 
 // SetTimeoutTicker sets the local timer. It may be useful to overwrite for
@@ -1299,78 +1284,12 @@ func (cs *State) createProposalBlock() (*types.Block, error) {
 		cs.state,
 		commit,
 		proposerAddr,
-		func(l2BlockMeta tmbytes.HexBytes, txs types.Txs, blockHeight int64, blockTime time.Time) ([]byte, []byte) {
-			return cs.decideBatchPoint(l2BlockMeta, txs, blockHeight, blockTime)
-		})
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	cs.setTrustBatchData(ret.Hash(), ret.BatchHash, ret.L2BatchHeader)
-
 	return ret, nil
-}
-
-func (cs *State) setTrustBatchData(blockHash tmbytes.HexBytes, batchHash, batchHeader []byte) {
-	cs.batchCache.StoreBatchData(blockHash, batchHash, batchHeader)
-}
-
-func (cs *State) decideBatchPoint(l2BlockMeta tmbytes.HexBytes, txs types.Txs, blockHeight int64, blockTime time.Time) (batchHash []byte, batchHeader []byte) {
-	batchStartHeight, batchStartTime := cs.getBatchStart()
-	sizeExceeded, err := cs.l2Node.CalculateCapWithProposalBlock(
-		l2BlockMeta.Bytes(),
-		txs,
-		func() (parentBatchHeader []byte, blocksMeta [][]byte, transactions []types.Txs, err error) {
-			// cs.getBatchStart promised we have batch data cached in cs.batchCache
-			parentBatchHeader = cs.batchCache.ParentBatchHeader
-			historicBlocks := cs.batchCache.BlocksSinceLastBatchPoint
-
-			blocksMeta = make([][]byte, len(historicBlocks))
-			transactions = make([]types.Txs, len(historicBlocks))
-			var transactionsCount int
-			for i, hb := range historicBlocks {
-				blocksMeta[i] = hb.L2BlockMeta
-				transactions[i] = hb.Txs
-				transactionsCount += hb.Txs.Len()
-			}
-			cs.Logger.Info("fetching blocks since last batch point", "lastBatchPoint", batchStartHeight, "blockCount", len(historicBlocks), "transactionTotalCount", transactionsCount)
-			return
-		})
-	if err != nil {
-		panic(err)
-	}
-	cs.Logger.Info("decideBatchPoint",
-		"currentBlockHeight", blockHeight,
-		"batchStartHeight", batchStartHeight,
-		"currentBlockTime", blockTime.String(),
-		"batchStartTime", batchStartTime.String(),
-		"sizeExceeded", sizeExceeded,
-		"blocksIntervalParam", cs.state.ConsensusParams.Batch.BlocksInterval,
-		"TimeoutParam", cs.state.ConsensusParams.Batch.Timeout)
-	if blockHeight == 1 {
-		return
-	}
-	if sizeExceeded ||
-		(cs.state.ConsensusParams.Batch.BlocksInterval > 0 && blockHeight-batchStartHeight >= cs.state.ConsensusParams.Batch.BlocksInterval) ||
-		(cs.state.ConsensusParams.Batch.Timeout > 0 && blockTime.Sub(batchStartTime) >= cs.state.ConsensusParams.Batch.Timeout) {
-		batchHash, batchHeader, err = cs.l2Node.SealBatch()
-		if err != nil {
-			panic(err)
-		}
-	}
-	return batchHash, batchHeader
-}
-
-func (cs *State) decideBatchPointWithProposedBlock(block *types.Block) (batchHash []byte, batchHeader []byte) {
-	if cs.batchCache != nil {
-		getBatchData, found := cs.batchCache.batchData(block.Hash())
-		if found {
-			return getBatchData.batchHash, getBatchData.batchHeader
-		}
-	}
-	batchHash, batchHeader = cs.decideBatchPoint(block.L2BlockMeta, block.Txs, block.Height, block.Time)
-	cs.batchCache.StoreBatchData(block.Hash(), batchHash, batchHeader)
-	return
 }
 
 // Enter: `timeoutPropose` after entering Propose.
@@ -1456,18 +1375,6 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 	}
 
 	if cs.isValidator(cs.privValidatorPubKey.Address()) {
-		// Vote nil if found unexpected batchHash or batchHeader
-		batchHash, batchHeader := cs.decideBatchPointWithProposedBlock(cs.ProposalBlock)
-		if !bytes.Equal(batchHash, cs.ProposalBlock.BatchHash) {
-			logger.Error("prevote step: consensus deems this block invalid; prevoting nil", "reason", "unexpected batchHash", "expected", batchHash, "actual", cs.ProposalBlock.BatchHash)
-			cs.signAddVote(tmproto.PrevoteType, nil, nil, types.PartSetHeader{})
-			return
-		}
-		if !bytes.Equal(batchHeader, cs.ProposalBlock.L2BatchHeader) {
-			logger.Error("prevote step: consensus deems this block invalid; prevoting nil", "reason", "unexpected batchHeader", "expected", batchHeader, "actual", cs.ProposalBlock.L2BatchHeader)
-			cs.signAddVote(tmproto.PrevoteType, nil, nil, types.PartSetHeader{})
-			return
-		}
 		// request l2node to check whether the block data is valid
 		valid, err := cs.l2Node.CheckBlockData(
 			l2node.ConvertTxsToBytes(cs.ProposalBlock.Data.Txs),
@@ -1489,7 +1396,7 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 	// NOTE: the proposal signature is validated when it is received,
 	// and the proposal block parts are validated as they are received (against the merkle hash in the proposal)
 	logger.Debug("prevote step: ProposalBlock is valid")
-	cs.signAddVote(tmproto.PrevoteType, cs.ProposalBlock.Hash(), cs.ProposalBlock.BatchHash, cs.ProposalBlockParts.Header())
+	cs.signAddVote(tmproto.PrevoteType, cs.ProposalBlock.Hash(), nil, cs.ProposalBlockParts.Header())
 }
 
 // Enter: any +2/3 prevotes at next round.
@@ -1604,7 +1511,7 @@ func (cs *State) enterPrecommit(height int64, round int32) {
 			logger.Error("failed publishing event relock", "err", err)
 		}
 
-		cs.signAddVote(tmproto.PrecommitType, blockID.Hash, cs.ProposalBlock.BatchHash, blockID.PartSetHeader)
+		cs.signAddVote(tmproto.PrecommitType, blockID.Hash, nil, blockID.PartSetHeader)
 		return
 	}
 
@@ -1617,14 +1524,6 @@ func (cs *State) enterPrecommit(height int64, round int32) {
 			panic(fmt.Sprintf("precommit step; +2/3 prevoted for an invalid block: %v", err))
 		}
 
-		if cs.isValidator(cs.privValidatorPubKey.Address()) { // currently we skip batchPoint check for non-validator
-			// Validate batch data.
-			batchHash, batchHeader := cs.decideBatchPointWithProposedBlock(cs.ProposalBlock)
-			if !bytes.Equal(batchHash, cs.ProposalBlock.BatchHash) || !bytes.Equal(batchHeader, cs.ProposalBlock.L2BatchHeader) {
-				panic(fmt.Sprintf("precommit step; +2/3 prevoted for an invalid block: %v", fmt.Errorf("unexpected batchData. expectedHash: %x, actualHash: %x", batchHash, cs.ProposalBlock.BatchHash)))
-			}
-		}
-
 		cs.LockedRound = round
 		cs.LockedBlock = cs.ProposalBlock
 		cs.LockedBlockParts = cs.ProposalBlockParts
@@ -1633,7 +1532,7 @@ func (cs *State) enterPrecommit(height int64, round int32) {
 			logger.Error("failed publishing event lock", "err", err)
 		}
 
-		cs.signAddVote(tmproto.PrecommitType, blockID.Hash, cs.ProposalBlock.BatchHash, blockID.PartSetHeader)
+		cs.signAddVote(tmproto.PrecommitType, blockID.Hash, nil, blockID.PartSetHeader)
 		return
 	}
 
@@ -1899,15 +1798,6 @@ func (cs *State) finalizeCommit(height int64) {
 	// must be called before we update state
 	cs.recordMetrics(height, block)
 
-	if cs.batchCache != nil {
-		cs.batchCache.ClearBatchData()
-		if block.IsBatchPoint() { // batch point
-			cs.batchCache.UpdateStartPoint(block)
-			cs.Logger.Debug("updated start point", "blockHeight", block.Height, "batchHash", block.BatchHash)
-		} else {
-			cs.batchCache.AppendBlock(block)
-		}
-	}
 	// NewHeightStep!
 	cs.updateToState(stateCopy)
 
@@ -2293,40 +2183,9 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID, replay bool) (added bo
 			return
 		}
 
-		// check the bls signature before adding it to LastCommit
-		if len(vote.BlockID.BatchHash) > 0 {
-			if len(vote.BLSSignature) == 0 {
-				return false, errors.New("can not find bls signature while the batchHash is not empty")
-			}
-			pubKey := cs.Validators.Validators[vote.ValidatorIndex].PubKey.Bytes()
-			valid, err := cs.l2Node.VerifySignature(pubKey, vote.BlockID.BatchHash, vote.BLSSignature)
-			if err != nil {
-				cs.Logger.Error("failed to verify bls signature", "err", err)
-				return false, nil
-			}
-			if !valid {
-				return false, fmt.Errorf("%v. sig: %x, batchHash: %x, tmKey: %x", ErrBLSSignatureInalvid, vote.BLSSignature, vote.BlockID.BatchHash, pubKey)
-			}
-		} else if len(vote.BLSSignature) > 0 {
-			return false, errors.New("should not have bls signature while the batchHash is empty")
-		}
-
 		added, err = cs.LastCommit.AddVote(vote)
 		if !added {
 			return
-		}
-
-		if len(vote.BlockID.BatchHash) > 0 {
-			_, val := cs.LastValidators.GetByAddress(vote.ValidatorAddress)
-			blsData := l2node.BlsData{
-				Signer:      val.PubKey.Bytes(),
-				Signature:   vote.BLSSignature,
-				VotingPower: val.VotingPower,
-			}
-
-			if err = cs.l2Node.AppendBlsData(vote.Height, vote.BlockID.BatchHash, blsData); err != nil {
-				cs.Logger.Error("failed to append blsData", "err", err)
-			}
 		}
 
 		cs.Logger.Debug("added vote to last precommits", "last_commit", cs.LastCommit.StringShort())
@@ -2356,26 +2215,6 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID, replay bool) (added bo
 	if vote.Height != cs.Height {
 		cs.Logger.Debug("vote ignored and not added", "vote_height", vote.Height, "cs_height", cs.Height, "peer", peerID)
 		return
-	}
-
-	// verify the bls signature if it exists
-	if vote.Type == tmproto.PrecommitType {
-		if len(vote.BlockID.BatchHash) > 0 {
-			if len(vote.BLSSignature) == 0 {
-				return false, fmt.Errorf("lack of bls signature of batchHash: %x", vote.BlockID.BatchHash)
-			}
-			pubKey := cs.Validators.Validators[vote.ValidatorIndex].PubKey.Bytes()
-			valid, err := cs.l2Node.VerifySignature(pubKey, vote.BlockID.BatchHash, vote.BLSSignature)
-			if err != nil {
-				return false, fmt.Errorf("failed to verify bls signature. err: %v", err)
-			}
-
-			if !valid {
-				return false, fmt.Errorf("%v. sig: %x, batchHash: %x, tmKey: %x", ErrBLSSignatureInalvid, vote.BLSSignature, vote.BlockID.BatchHash, pubKey)
-			}
-		} else if len(vote.BLSSignature) > 0 {
-			return false, errors.New("should not have bls signature while the batchHash is empty")
-		}
 	}
 
 	height := cs.Height
@@ -2558,16 +2397,6 @@ func (cs *State) signVote(
 	vote.Signature = v.Signature
 	vote.Timestamp = v.Timestamp
 
-	if len(batchHash) != 0 {
-		sig, err := blssignatures.SignMessage(
-			*cs.blsPrivKey,
-			batchHash,
-		)
-		if err != nil {
-			return nil, err
-		}
-		vote.BLSSignature = blssignatures.SignatureToBytes(sig)
-	}
 	return vote, nil
 }
 

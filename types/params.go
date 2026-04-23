@@ -32,20 +32,16 @@ var ABCIPubKeyTypesToNames = map[string]string{
 
 // ConsensusParams contains consensus critical parameters that determine the
 // validity of blocks.
+//
+// The proto-level tmproto.BatchParams field is preserved on the wire for
+// compatibility with historical state, but no Go-level field is exposed here:
+// sequencer-side batch generation has been removed and tmproto.BatchParams is
+// ignored by both Update and ConsensusParamsFromProto.
 type ConsensusParams struct {
-	Batch     BatchParams     `json:"batch"`
 	Block     BlockParams     `json:"block"`
 	Evidence  EvidenceParams  `json:"evidence"`
 	Validator ValidatorParams `json:"validator"`
 	Version   VersionParams   `json:"version"`
-}
-
-// BatchParams define when to generate batch
-type BatchParams struct {
-	BlocksInterval int64         `json:"blocks_interval"`
-	MaxBytes       int64         `json:"max_bytes"`
-	Timeout        time.Duration `json:"timeout"`
-	MaxChunks      int64         `json:"max_chunks"`
 }
 
 // BlockParams define limits on the block size and gas plus minimum time
@@ -75,20 +71,10 @@ type VersionParams struct {
 // DefaultConsensusParams returns a default ConsensusParams.
 func DefaultConsensusParams() *ConsensusParams {
 	return &ConsensusParams{
-		Batch:     DefaultBatchParams(),
 		Block:     DefaultBlockParams(),
 		Evidence:  DefaultEvidenceParams(),
 		Validator: DefaultValidatorParams(),
 		Version:   DefaultVersionParams(),
-	}
-}
-
-func DefaultBatchParams() BatchParams {
-	return BatchParams{
-		BlocksInterval: 10,
-		MaxBytes:       8388608,
-		Timeout:        60 * time.Second,
-		MaxChunks:      15,
 	}
 }
 
@@ -187,26 +173,6 @@ func (params ConsensusParams) ValidateBasic() error {
 		return errors.New("len(Validator.PubKeyTypes) must be greater than 0")
 	}
 
-	if params.Batch.BlocksInterval < 0 {
-		return errors.New("blocks_interval can't be negative")
-	}
-
-	if params.Batch.MaxBytes < 0 {
-		return errors.New("max_bytes can't be negative")
-	}
-
-	if params.Batch.Timeout < 0 {
-		return errors.New("timeout can't be negative")
-	}
-
-	if params.Batch.MaxChunks < 0 {
-		return errors.New("max_chunks can't be negative")
-	}
-
-	if params.Batch.BlocksInterval <= 0 && params.Batch.MaxBytes <= 0 && params.Batch.Timeout <= 0 && params.Batch.MaxChunks <= 0 {
-		return errors.New("blocks_interval, max_bytes, timeout and max_chunks can't be all 0")
-	}
-
 	// Check if keyType is a known ABCIPubKeyType
 	for i := 0; i < len(params.Validator.PubKeyTypes); i++ {
 		keyType := params.Validator.PubKeyTypes[i]
@@ -254,13 +220,8 @@ func (params ConsensusParams) Update(params2 *tmproto.ConsensusParams) Consensus
 		return res
 	}
 
-	// we must defensively consider any structs may be nil
-	if params2.Batch != nil {
-		res.Batch.BlocksInterval = params2.Batch.BlocksInterval
-		res.Batch.MaxBytes = params2.Batch.MaxBytes
-		res.Batch.Timeout = params2.Batch.Timeout
-		res.Batch.MaxChunks = params2.Batch.MaxChunks
-	}
+	// proto-level params2.Batch is intentionally ignored: sequencer batch
+	// generation is removed and the proto field exists only for wire compat.
 	if params2.Block != nil {
 		res.Block.MaxBytes = params2.Block.MaxBytes
 		res.Block.MaxGas = params2.Block.MaxGas
@@ -284,12 +245,6 @@ func (params ConsensusParams) Update(params2 *tmproto.ConsensusParams) Consensus
 
 func (params *ConsensusParams) ToProto() tmproto.ConsensusParams {
 	return tmproto.ConsensusParams{
-		Batch: &tmproto.BatchParams{
-			BlocksInterval: params.Batch.BlocksInterval,
-			MaxBytes:       params.Batch.MaxBytes,
-			Timeout:        params.Batch.Timeout,
-			MaxChunks:      params.Batch.MaxChunks,
-		},
 		Block: &tmproto.BlockParams{
 			MaxBytes: params.Block.MaxBytes,
 			MaxGas:   params.Block.MaxGas,
@@ -309,13 +264,8 @@ func (params *ConsensusParams) ToProto() tmproto.ConsensusParams {
 }
 
 func ConsensusParamsFromProto(pbParams tmproto.ConsensusParams) ConsensusParams {
+	// proto-level pbParams.Batch is intentionally ignored; see ConsensusParams docs.
 	return ConsensusParams{
-		Batch: BatchParams{
-			BlocksInterval: pbParams.Batch.BlocksInterval,
-			MaxBytes:       pbParams.Batch.MaxBytes,
-			Timeout:        pbParams.Batch.Timeout,
-			MaxChunks:      pbParams.Batch.MaxChunks,
-		},
 		Block: BlockParams{
 			MaxBytes: pbParams.Block.MaxBytes,
 			MaxGas:   pbParams.Block.MaxGas,

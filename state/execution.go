@@ -111,7 +111,6 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 	state State,
 	commit *types.Commit,
 	proposerAddr []byte,
-	decideBatchPoint decideBatchPointFunc,
 ) (
 	*types.Block, error,
 ) {
@@ -145,7 +144,7 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 		}
 	}
 
-	block := state.MakeBlock(height, l2node.ConvertBytesToTxs(txs), blockMeta, commit, evidence, proposerAddr, nil) // set 'decideBatchPoint' to nil here to prevent duplicated execution.
+	block := state.MakeBlock(height, l2node.ConvertBytesToTxs(txs), blockMeta, commit, evidence, proposerAddr)
 
 	localLastCommit := buildLastCommitInfo(block, blockExec.store, state.InitialHeight)
 	rpp, err := blockExec.proxyApp.PrepareProposalSync(
@@ -173,7 +172,7 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 		return nil, err
 	}
 
-	return state.MakeBlock(height, txl, blockMeta, commit, evidence, proposerAddr, decideBatchPoint), nil
+	return state.MakeBlock(height, txl, blockMeta, commit, evidence, proposerAddr), nil
 }
 
 func (blockExec *BlockExecutor) ProcessProposal(
@@ -237,7 +236,7 @@ func (blockExec *BlockExecutor) ApplyBlock(
 	nextValidators := state.NextValidators.GetPubKeyBytesList()
 	if blockExec.l2Node != nil {
 		startTime := time.Now().UnixNano()
-		nextBatchParams, nextValidatorSet, err := ExecBlockOnL2Node(blockExec.logger, blockExec.l2Node, block, state.Validators, commit)
+		nextBatchParams, nextValidatorSet, err := ExecBlockOnL2Node(blockExec.logger, blockExec.l2Node, block, state.Validators)
 		endTime := time.Now().UnixNano()
 		blockExec.metrics.BlockProcessingTime.Observe(float64(endTime-startTime) / 1000000)
 		if err != nil {
@@ -387,7 +386,7 @@ func (blockExec *BlockExecutor) Commit(
 //---------------------------------------------------------
 // Helper functions for executing blocks and updating state
 
-func ExecBlockOnL2Node(logger log.Logger, l2Node l2node.L2Node, block *types.Block, validatorSet *types.ValidatorSet, commit *types.Commit) (*tmproto.BatchParams, [][]byte, error) {
+func ExecBlockOnL2Node(logger log.Logger, l2Node l2node.L2Node, block *types.Block, validatorSet *types.ValidatorSet) (*tmproto.BatchParams, [][]byte, error) {
 	var validators [][]byte
 	if validatorSet != nil {
 		validators = validatorSet.GetPubKeyBytesList()
@@ -398,31 +397,11 @@ func ExecBlockOnL2Node(logger log.Logger, l2Node l2node.L2Node, block *types.Blo
 		block.L2BlockMeta,
 		l2node.ConsensusData{
 			ValidatorSet: validators,
-			BatchHash:    block.BatchHash,
 		},
 	)
 	if err != nil {
 		logger.Error("failed to deliver block", "err", err, "height", block.Height)
 		return nil, nil, err
-	}
-
-	// batch operation
-	if commit != nil {
-		blsDatas, err := l2node.GetBLSDatas(commit, validatorSet)
-		if err != nil {
-			panic(err)
-		}
-		if len(block.BatchHash) > 0 { // this is a batchPoint
-			if err = l2Node.CommitBatch(block.L2BlockMeta, block.Txs, blsDatas); err != nil {
-				logger.Error("failed to commit batch", "err", err, "height", block.Height)
-				return nil, nil, err
-			}
-		} else {
-			if err = l2Node.PackCurrentBlock(block.L2BlockMeta, block.Txs); err != nil {
-				logger.Error("failed to pack current block", "err", err, "height", block.Height)
-				return nil, nil, err
-			}
-		}
 	}
 
 	return nextBatchParams, nextValidatorSet, nil

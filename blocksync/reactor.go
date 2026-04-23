@@ -1,8 +1,6 @@
 package blocksync
 
 import (
-	"bytes"
-	"errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -553,53 +551,6 @@ FOR_LOOP:
 			if err = state.Validators.VerifyCommitLight(chainID, firstID, first.Height, second.LastCommit); err == nil {
 				// validate the block before we persist it
 				err = bcR.blockExec.ValidateBlock(state, first)
-			}
-
-			// make sure the block has valid batchHash and batchHeader, and has the enough valid BLS signatures if it is a batch point
-			if err == nil {
-				err = func() error {
-					// check the correctness of the relation of batchHash and batchHeader
-					if len(first.L2BatchHeader) > 0 {
-						batchHash, hashErr := bcR.l2Node.BatchHash(first.L2BatchHeader)
-						if hashErr != nil {
-							return hashErr
-						}
-						if !bytes.Equal(first.BatchHash, batchHash) {
-							return fmt.Errorf("wrong batchHash. expectedHash: %x, actualHash: %x, batchHeader: %x", batchHash, first.BatchHash, first.L2BatchHeader)
-						}
-					} else if len(first.BatchHash) > 0 {
-						return errors.New("batch hash can not exist when batchHeader is empty")
-					}
-
-					blsDatas, err := l2node.GetBLSDatas(second.LastCommit, state.Validators)
-					if err != nil {
-						return err
-					}
-					var validVotingPowers int64
-					if len(blsDatas) > 0 {
-						if len(first.BatchHash) == 0 {
-							return errors.New("should not have bls signatures when batchHash is empty")
-						}
-						for _, blsData := range blsDatas {
-							// todo currently can not ensure the l2node has the corresponding bls public key of the signer
-							//valid, err := bcR.l2Node.VerifySignature(blsData.Signer, first.BatchHash, blsData.Signature)
-							//if err != nil {
-							//	return err
-							//}
-							//if valid {
-							//	validVotingPowers += blsData.VotingPower
-							//}
-							validVotingPowers += blsData.VotingPower
-						}
-						quorum := state.Validators.TotalVotingPower()*2/3 + 1
-						if validVotingPowers < quorum {
-							return fmt.Errorf("not enough votingPowers of valid bls signature. quorum: %d, valid votingPower: %d", quorum, validVotingPowers)
-						}
-					} else if len(first.BatchHash) > 0 {
-						return errors.New("must have bls signatures when batchHash is not empty")
-					}
-					return nil
-				}()
 			}
 
 			if err != nil {
