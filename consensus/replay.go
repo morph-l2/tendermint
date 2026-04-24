@@ -475,7 +475,7 @@ func (h *Handshaker) replayBlocks(
 		h.logger.Info("Applying block", "height", i)
 		block := h.store.LoadBlock(i)
 
-		_, _, err = sm.ExecBlockOnL2Node(h.logger, l2node, block, nil)
+		_, err = sm.ExecBlockOnL2Node(h.logger, l2node, block, nil)
 		if err != nil {
 			return nil, err
 		}

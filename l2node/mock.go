@@ -8,7 +8,6 @@ import (
 	tmjson "github.com/tendermint/tendermint/libs/json"
 	tmos "github.com/tendermint/tendermint/libs/os"
 	tmrand "github.com/tendermint/tendermint/libs/rand"
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 )
 
 var _ L2Node = &MockL2Node{}
@@ -99,7 +98,6 @@ func (l *MockL2Node) DeliverBlock(
 	meta []byte,
 	consensusData ConsensusData,
 ) (
-	nextBatchParams *tmproto.BatchParams,
 	nextValidatorSet [][]byte,
 	err error,
 ) {
@@ -128,7 +126,7 @@ func (l *MockL2Node) DeliverBlock(
 		}()
 	}
 
-	return nextBatchParams, nextValidatorSet, err
+	return nextValidatorSet, err
 }
 
 // ==================== V2 Methods for Sequencer Mode ====================

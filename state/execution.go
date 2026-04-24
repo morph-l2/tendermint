@@ -236,14 +236,14 @@ func (blockExec *BlockExecutor) ApplyBlock(
 	nextValidators := state.NextValidators.GetPubKeyBytesList()
 	if blockExec.l2Node != nil {
 		startTime := time.Now().UnixNano()
-		nextBatchParams, nextValidatorSet, err := ExecBlockOnL2Node(blockExec.logger, blockExec.l2Node, block, state.Validators)
+		nextValidatorSet, err := ExecBlockOnL2Node(blockExec.logger, blockExec.l2Node, block, state.Validators)
 		endTime := time.Now().UnixNano()
 		blockExec.metrics.BlockProcessingTime.Observe(float64(endTime-startTime) / 1000000)
 		if err != nil {
 			return state, 0, err
 		}
 
-		consensusParamUpdates = blockExec.GetConsensusParamsUpdate(nextBatchParams, nil, nil, nil, nil)
+		consensusParamUpdates = blockExec.GetConsensusParamsUpdate(nil, nil, nil, nil)
 		validatorUpdates = blockExec.GetValidatorUpdates(nextValidatorSet, nextValidators)
 	}
 
@@ -287,17 +287,18 @@ func (blockExec *BlockExecutor) ApplyBlock(
 }
 
 func (blockExec *BlockExecutor) GetConsensusParamsUpdate(
-	nextBatchParams *tmproto.BatchParams,
 	block *tmproto.BlockParams,
 	evidence *tmproto.EvidenceParams,
 	validator *tmproto.ValidatorParams,
 	version *tmproto.VersionParams,
 ) *tmproto.ConsensusParams {
-	if nextBatchParams == nil && block == nil && evidence == nil && validator == nil && version == nil {
+	if block == nil && evidence == nil && validator == nil && version == nil {
 		return nil
 	}
+	// proto-level Batch field is intentionally omitted: sequencer batch
+	// generation is removed and the proto field exists only for wire compat
+	// (see types.ConsensusParams docs and Update/FromProto).
 	return &tmproto.ConsensusParams{
-		Batch:     nextBatchParams,
 		Block:     block,
 		Evidence:  evidence,
 		Validator: validator,
@@ -386,13 +387,13 @@ func (blockExec *BlockExecutor) Commit(
 //---------------------------------------------------------
 // Helper functions for executing blocks and updating state
 
-func ExecBlockOnL2Node(logger log.Logger, l2Node l2node.L2Node, block *types.Block, validatorSet *types.ValidatorSet) (*tmproto.BatchParams, [][]byte, error) {
+func ExecBlockOnL2Node(logger log.Logger, l2Node l2node.L2Node, block *types.Block, validatorSet *types.ValidatorSet) ([][]byte, error) {
 	var validators [][]byte
 	if validatorSet != nil {
 		validators = validatorSet.GetPubKeyBytesList()
 	}
 
-	nextBatchParams, nextValidatorSet, err := l2Node.DeliverBlock(
+	nextValidatorSet, err := l2Node.DeliverBlock(
 		l2node.ConvertTxsToBytes(block.Data.Txs),
 		block.L2BlockMeta,
 		l2node.ConsensusData{
@@ -401,10 +402,10 @@ func ExecBlockOnL2Node(logger log.Logger, l2Node l2node.L2Node, block *types.Blo
 	)
 	if err != nil {
 		logger.Error("failed to deliver block", "err", err, "height", block.Height)
-		return nil, nil, err
+		return nil, err
 	}
 
-	return nextBatchParams, nextValidatorSet, nil
+	return nextValidatorSet, nil
 }
 
 // Executes block's transactions on proxyAppConn.

@@ -1,7 +1,6 @@
 package l2node
 
 import (
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/types"
 )
 
@@ -45,7 +44,6 @@ type L2Node interface {
 		blockMeta []byte,
 		consensusData ConsensusData,
 	) (
-		nextBatchParams *tmproto.BatchParams, // set nil if no update
 		nextValidatorSet [][]byte,
 		err error,
 	)
