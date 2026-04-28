@@ -46,7 +46,14 @@ const (
 	maxDiffBetweenCurrentAndReceivedBlockHeight = 100
 )
 
-var peerTimeout = 15 * time.Second // not const so we can override with tests
+var (
+	peerTimeout = 15 * time.Second // not const so we can override with tests
+
+	// peerBanDuration is how long a misbehaving peer is kept out of the pool
+	// after being detected. Declared as a variable (not const) so tests can
+	// override it.
+	peerBanDuration = 10 * time.Minute
+)
 
 /*
 	Peers self report their heights when we join the block pool.
@@ -71,6 +78,11 @@ type BlockPool struct {
 	// peers
 	peers         map[p2p.ID]*bpPeer
 	maxPeerHeight int64 // the biggest reported height
+	// peers that have been detected as misbehaving (e.g. broadcasting a
+	// decreasing height, base > height, or otherwise malformed StatusResponse).
+	// The value stores the time at which the ban expires; entries are evicted
+	// lazily by isPeerBanned. Access is guarded by mtx.
+	bannedPeers map[p2p.ID]time.Time
 
 	// atomic
 	numPending int32 // number of requests pending assignment or block response
@@ -83,7 +95,8 @@ type BlockPool struct {
 // requests and errors will be sent to requestsCh and errorsCh accordingly.
 func NewBlockPool(start int64, requestsCh chan<- BlockRequest, errorsCh chan<- peerError) *BlockPool {
 	bp := &BlockPool{
-		peers: make(map[p2p.ID]*bpPeer),
+		peers:       make(map[p2p.ID]*bpPeer),
+		bannedPeers: make(map[p2p.ID]time.Time),
 
 		requesters: make(map[int64]*bpRequester),
 		height:     start,
@@ -238,6 +251,12 @@ func (pool *BlockPool) PopRequest() {
 		}
 		delete(pool.requesters, pool.height)
 		pool.height++
+
+		// Recompute maxPeerHeight: peers whose base used to be greater than
+		// pool.height (and were therefore filtered out by updateMaxPeerHeight)
+		// may now be eligible to serve subsequent heights and contribute to
+		// maxPeerHeight. See spec-003 for details.
+		pool.updateMaxPeerHeight()
 	} else {
 		panic(fmt.Sprintf("Expected requester to pop, got nothing at height %v", pool.height))
 	}
@@ -312,23 +331,80 @@ func (pool *BlockPool) GetPeerIDs() []p2p.ID {
 }
 
 // SetPeerRange sets the peer's alleged blockchain base and height.
+//
+// It also enforces basic sanity checks against malicious or buggy peers
+// (see spec-003-blocksync-malicious-peer-fix):
+//
+//   - A peer reporting base > height is structurally impossible and is banned
+//     (CometBFT issue #5801 hardening).
+//   - An existing peer reporting a strictly lower height or base than what it
+//     reported previously is removed from the pool and banned to prevent
+//     poisoning of maxPeerHeight (CVE-2025-24371).
+//   - A peer that has been banned recently is silently ignored if it tries to
+//     re-introduce itself before its ban expires.
+//
+// In all non-malicious cases, maxPeerHeight is recomputed via
+// updateMaxPeerHeight, which filters peers whose base is above pool.height.
 func (pool *BlockPool) SetPeerRange(peerID p2p.ID, base int64, height int64) {
 	pool.mtx.Lock()
 	defer pool.mtx.Unlock()
 
+	if base > height {
+		pool.Logger.Info("Peer reporting base greater than height; banning",
+			"peer", peerID, "base", base, "height", height)
+		if _, exists := pool.peers[peerID]; exists {
+			pool.removePeer(peerID)
+		}
+		pool.banPeer(peerID)
+		return
+	}
+
 	peer := pool.peers[peerID]
 	if peer != nil {
+		if height < peer.height || base < peer.base {
+			pool.Logger.Info("Peer reporting decreasing height or base; removing and banning",
+				"peer", peerID,
+				"prevHeight", peer.height, "height", height,
+				"prevBase", peer.base, "base", base)
+			pool.removePeer(peerID)
+			pool.banPeer(peerID)
+			return
+		}
 		peer.base = base
 		peer.height = height
 	} else {
+		if pool.isPeerBanned(peerID) {
+			pool.Logger.Debug("Ignoring banned peer", "peer", peerID)
+			return
+		}
 		peer = newBPPeer(pool, peerID, base, height)
 		peer.setLogger(pool.Logger.With("peer", peerID))
 		pool.peers[peerID] = peer
 	}
 
-	if height > pool.maxPeerHeight {
-		pool.maxPeerHeight = height
+	pool.updateMaxPeerHeight()
+}
+
+// banPeer marks peerID as misbehaving for peerBanDuration. Subsequent attempts
+// to introduce this peer to the pool will be ignored until the ban expires.
+// Caller must hold pool.mtx.
+func (pool *BlockPool) banPeer(peerID p2p.ID) {
+	pool.bannedPeers[peerID] = time.Now().Add(peerBanDuration)
+}
+
+// isPeerBanned reports whether peerID is currently banned. Expired entries are
+// evicted lazily so the map stays bounded under steady-state churn.
+// Caller must hold pool.mtx.
+func (pool *BlockPool) isPeerBanned(peerID p2p.ID) bool {
+	expiry, ok := pool.bannedPeers[peerID]
+	if !ok {
+		return false
 	}
+	if time.Now().Before(expiry) {
+		return true
+	}
+	delete(pool.bannedPeers, peerID)
+	return false
 }
 
 // RemovePeer removes the peer with peerID from the pool. If there's no peer
@@ -363,10 +439,30 @@ func (pool *BlockPool) removePeer(peerID p2p.ID) {
 	}
 }
 
-// If no peers are left, maxPeerHeight is set to 0.
+// updateMaxPeerHeight recomputes pool.maxPeerHeight by inspecting all current
+// peers. If no peers are left, maxPeerHeight is set to 0.
+//
+// Peers whose base is strictly greater than pool.height are excluded: such a
+// peer cannot serve the block at pool.height (the next block we need), so
+// counting it would let an attacker poison maxPeerHeight by advertising a
+// huge base/height pair, causing IsCaughtUp() to return false forever and
+// makeNextRequester() to spawn requesters that no peer can satisfy
+// (CometBFT issue #5801).
+//
+// As a safety net, when pool.height == 0 (initial state, before we have
+// requested any block) we accept all peers — at this point we don't yet
+// know which peers will be useful, and rejecting all of them would prevent
+// startup if every peer happened to have a non-zero base.
+//
+// PopRequest is responsible for calling this function after pool.height is
+// advanced, so that peers whose base now matches pool.height are
+// re-introduced into the calculation.
 func (pool *BlockPool) updateMaxPeerHeight() {
 	var max int64
 	for _, peer := range pool.peers {
+		if pool.height > 0 && peer.base > pool.height {
+			continue
+		}
 		if peer.height > max {
 			max = peer.height
 		}
