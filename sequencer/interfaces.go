@@ -8,8 +8,17 @@ import (
 
 // Sentinel errors for block processing
 var (
-	// ErrInvalidSignature indicates block signature verification failed
+	// ErrInvalidSignature indicates the block's signature is provably invalid.
+	// This is a malicious-peer signal: the block's content does not match a
+	// legitimate sequencer signature. Callers should ban the sender.
 	ErrInvalidSignature = errors.New("invalid block signature")
+
+	// ErrVerifierUnavailable indicates the local verifier could not determine
+	// whether a signature is valid (e.g. not configured, L1 backend RPC
+	// failure, transient IO error). This is NOT a peer-misbehavior signal —
+	// the peer may be honest; we just cannot decide right now. Callers must
+	// NOT ban the sender on this error; retry or drop silently instead.
+	ErrVerifierUnavailable = errors.New("verifier unavailable")
 )
 
 // SequencerVerifier verifies if an address is a valid L1 sequencer.

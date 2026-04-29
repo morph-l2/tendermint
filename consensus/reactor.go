@@ -128,7 +128,7 @@ func (conR *Reactor) SwitchToConsensus(state sm.State, skipWAL bool) {
 	conR.Logger.Info("SwitchToConsensus")
 
 	// We have no votes, so reconstruct LastCommit from SeenCommit.
-	if state.LastBlockHeight > 0 {
+	if state.LastBlockHeight > 0 && !upgrade.IsUpgraded(state.LastBlockHeight+1) {
 		conR.conS.reconstructLastCommit(state)
 	}
 

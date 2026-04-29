@@ -499,7 +499,6 @@ func createConsensusReactor(
 func createSequencerComponents(
 	l2Node l2node.L2Node,
 	pool *bc.BlockPool,
-	waitSync bool,
 	logger log.Logger,
 	verifier sequencer.SequencerVerifier,
 	signer sequencer.Signer,
@@ -519,11 +518,12 @@ func createSequencerComponents(
 		return nil, nil, fmt.Errorf("failed to create StateV2: %w", err)
 	}
 
-	// Create BlockBroadcastReactor (not started yet)
+	// Create BlockBroadcastReactor (not started yet).
+	// Routines are started later via StartSequencerRoutines() — see OnStart()
+	// doc comment for the full explanation.
 	broadcastReactor := sequencer.NewBlockBroadcastReactor(
 		pool,
 		stateV2,
-		waitSync,
 		logger,
 		verifier,
 		sigStore,
@@ -1011,7 +1011,6 @@ func NewNode(
 		if node.stateV2, node.blockBroadcastReactor, err = createSequencerComponents(
 			l2NodeRef,
 			bcR.Pool(),
-			blockSync || stateSync,
 			logger,
 			sequencerVerifier,
 			sequencerSigner,

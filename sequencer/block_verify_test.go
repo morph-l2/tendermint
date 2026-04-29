@@ -159,8 +159,32 @@ func TestVerifyBlockSignature_NilVerifier(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for nil verifier, got nil")
 	}
-	if !errors.Is(err, ErrInvalidSignature) {
-		t.Errorf("expected ErrInvalidSignature, got: %v", err)
+	// nil verifier is a local configuration problem, not peer misbehavior.
+	if !errors.Is(err, ErrVerifierUnavailable) {
+		t.Errorf("expected ErrVerifierUnavailable, got: %v", err)
+	}
+	if errors.Is(err, ErrInvalidSignature) {
+		t.Errorf("nil verifier must not return ErrInvalidSignature (would cause false ban)")
+	}
+}
+
+// TestVerifyBlockSignature_BackendFailure: when the verifier backend (e.g. L1
+// RPC) fails transiently, VerifyBlockSignature must surface an
+// ErrVerifierUnavailable — not ErrInvalidSignature — otherwise honest peers
+// get banned during every local outage.
+func TestVerifyBlockSignature_BackendFailure(t *testing.T) {
+	block, _ := makeTestBlock(t, testKey)
+	verifier := &mockSequencerVerifier{err: errors.New("L1 RPC timeout")}
+
+	err := VerifyBlockSignature(verifier, block)
+	if err == nil {
+		t.Fatal("expected error when verifier backend fails, got nil")
+	}
+	if !errors.Is(err, ErrVerifierUnavailable) {
+		t.Errorf("expected ErrVerifierUnavailable for backend failure, got: %v", err)
+	}
+	if errors.Is(err, ErrInvalidSignature) {
+		t.Errorf("backend failure must not return ErrInvalidSignature (would cause false ban)")
 	}
 }
 

@@ -68,9 +68,16 @@ func computeBlockHash(block *BlockV2) (common.Hash, error) {
 // height. The geth-side check in NewL2BlockV2 is the safety net; this check
 // rejects tampered blocks early so we never persist orphan signatures into
 // SignatureStore.
+// VerifyBlockSignature returns one of two classes of errors:
+//   - wrapping ErrInvalidSignature: the block is provably bad — the sender
+//     should be banned (malformed signature, tampered body, non-sequencer
+//     signer, etc.).
+//   - wrapping ErrVerifierUnavailable: the local verifier could not decide
+//     (not configured, L1 backend failure). The peer may be honest; the
+//     caller must not ban on this error.
 func VerifyBlockSignature(verifier SequencerVerifier, block *BlockV2) error {
 	if verifier == nil {
-		return fmt.Errorf("%w: verifier not configured", ErrInvalidSignature)
+		return fmt.Errorf("%w: verifier not configured", ErrVerifierUnavailable)
 	}
 
 	if len(block.Signature) == 0 {
@@ -94,7 +101,8 @@ func VerifyBlockSignature(verifier SequencerVerifier, block *BlockV2) error {
 
 	ok, err := verifier.IsSequencerAt(signer, block.Number)
 	if err != nil {
-		return fmt.Errorf("IsSequencerAt height %d: %w", block.Number, err)
+		// Backend failure (L1 RPC / IO) — local problem, not peer misbehavior.
+		return fmt.Errorf("%w: IsSequencerAt height %d: %v", ErrVerifierUnavailable, block.Number, err)
 	}
 	if !ok {
 		return fmt.Errorf("%w: signer %s is not sequencer at height %d",
