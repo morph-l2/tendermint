@@ -13,7 +13,6 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/tendermint/tendermint/abci/server"
-	"github.com/tendermint/tendermint/blssignatures"
 	"github.com/tendermint/tendermint/config"
 	"github.com/tendermint/tendermint/crypto/ed25519"
 	tmflags "github.com/tendermint/tendermint/libs/cli/flags"
@@ -124,22 +123,18 @@ func startNode(cfg *Config) error {
 		return fmt.Errorf("failed to setup config: %w", err)
 	}
 
-	blsPrivKey, err := blssignatures.PrivateKeyFromBytes(blssignatures.LoadBLSKey(tmcfg.BLSKeyFile()).PrivKey)
-	if err != nil {
-		return fmt.Errorf("failed to load bls priv key")
-	}
-
 	n, err := node.NewNode(
 		tmcfg,
 		nil, // TODO
 		privval.LoadOrGenFilePV(tmcfg.PrivValidatorKeyFile(), tmcfg.PrivValidatorStateFile()),
-		&blsPrivKey,
 		nodeKey,
 		proxy.NewLocalClientCreator(app),
 		node.DefaultGenesisDocProviderFunc(tmcfg),
 		node.DefaultDBProvider,
 		node.DefaultMetricsProvider(tmcfg.Instrumentation),
 		nodeLogger,
+		nil,
+		nil,
 	)
 	if err != nil {
 		return err

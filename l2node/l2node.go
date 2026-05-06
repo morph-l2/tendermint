@@ -1,9 +1,6 @@
 package l2node
 
 import (
-	"fmt"
-
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/types"
 )
 
@@ -11,7 +8,6 @@ import (
 type BlockV2 = types.BlockV2
 
 type L2Node interface {
-	Batcher
 	RequestHeight(
 		tmHeight int64,
 	) (
@@ -48,17 +44,7 @@ type L2Node interface {
 		blockMeta []byte,
 		consensusData ConsensusData,
 	) (
-		nextBatchParams *tmproto.BatchParams, // set nil if no update
 		nextValidatorSet [][]byte,
-		err error,
-	)
-
-	VerifySignature(
-		tmKey []byte,
-		message []byte, // batch context hash
-		signature []byte,
-	) (
-		valid bool,
 		err error,
 	)
 
@@ -83,54 +69,8 @@ type L2Node interface {
 	GetLatestBlockV2() (*BlockV2, error)
 }
 
-// Batcher is used to pack the blocks into a batch, and commit the batch if it is determined to be a batchPoint.
-type Batcher interface {
-	CalculateCapWithProposalBlock(
-		proposalBlockBytes []byte,
-		proposalTxs types.Txs,
-		get GetFromBatchStartFunc,
-	) (
-		sizeExceeded bool,
-		err error,
-	)
-
-	SealBatch() (
-		batchHash []byte,
-		batchHeader []byte,
-		err error,
-	)
-
-	CommitBatch(
-		currentBlockBytes []byte,
-		currentTxs types.Txs,
-		blsDatas []BlsData,
-	) error
-
-	PackCurrentBlock(
-		currentBlockBytes []byte,
-		currentTxs types.Txs,
-	) error
-
-	AppendBlsData(height int64, batchHash []byte, data BlsData) error
-
-	BatchHash(batchHeader []byte) ([]byte, error)
-}
-type GetFromBatchStartFunc func() (
-	parentBatchHeader []byte,
-	blockMetas [][]byte,
-	transactions []types.Txs,
-	err error,
-)
-
 type ConsensusData struct {
 	ValidatorSet [][]byte
-	BatchHash    []byte
-}
-
-type BlsData struct {
-	Signer      []byte
-	Signature   []byte
-	VotingPower int64
 }
 
 func ConvertBytesToTxs(txs [][]byte) []types.Tx {
@@ -147,22 +87,4 @@ func ConvertTxsToBytes(txs []types.Tx) [][]byte {
 		s[i] = v
 	}
 	return s
-}
-
-func GetBLSDatas(commit *types.Commit, validators *types.ValidatorSet) (blsDatas []BlsData, err error) {
-	for _, signature := range commit.Signatures {
-		if len(signature.BLSSignature) > 0 {
-			_, validator := validators.GetByAddress(signature.ValidatorAddress)
-			if validator == nil {
-				err = fmt.Errorf("no validator found by addresss: %x", signature.ValidatorAddress)
-				return
-			}
-			blsDatas = append(blsDatas, BlsData{
-				Signer:      validator.PubKey.Bytes(),
-				Signature:   signature.BLSSignature,
-				VotingPower: validator.VotingPower,
-			})
-		}
-	}
-	return
 }
