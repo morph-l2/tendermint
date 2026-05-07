@@ -1814,15 +1814,23 @@ func (cs *State) finalizeCommit(height int64) {
 			"height", cs.Height,
 			"upgradeHeight", upgrade.UpgradeBlockHeight)
 
-		// Call upgrade callback first (allows reactor to handle transition)
-		if cs.onUpgrade != nil {
-			cs.onUpgrade()
-		}
-
-		// Stop consensus state
+		// Stop consensus state first.
+		//
+		// This closes the BaseService quit channel synchronously, so any
+		// goroutine started by onUpgrade can safely call cs.Wait() to block
+		// until receiveRoutine has fully exited (cs.done closed). Stopping
+		// before onUpgrade guarantees the happens-before relationship that
+		// the reactor switch relies on.
 		if err := cs.Stop(); err != nil {
 			logger.Error("Failed to stop consensus state", "err", err)
 			panic(err)
+		}
+
+		// Notify upgrade observer (e.g. node-level reactor switch).
+		// The callback is expected to do its work in a goroutine and use
+		// cs.Wait() for synchronization rather than time-based heuristics.
+		if cs.onUpgrade != nil {
+			cs.onUpgrade()
 		}
 		return
 	}

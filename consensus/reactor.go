@@ -113,14 +113,6 @@ func (conR *Reactor) OnStop() {
 	}
 }
 
-// StopForUpgrade stops the consensus reactor when upgrading to sequencer mode.
-// This is called when the chain reaches the upgrade height.
-func (conR *Reactor) StopForUpgrade() {
-	conR.Logger.Info("Stopping consensus reactor for sequencer upgrade",
-		"height", conR.conS.Height,
-		"upgradeHeight", upgrade.UpgradeBlockHeight)
-	conR.OnStop()
-}
 
 // SwitchToConsensus switches from block_sync mode to consensus mode.
 // It resets the state, turns off block_sync, and starts the consensus state-machine

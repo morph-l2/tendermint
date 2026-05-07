@@ -1619,20 +1619,36 @@ func (n *Node) startSequencerMode() {
 func (n *Node) switchToSequencerMode() {
 	n.Logger.Info("Upgrade callback triggered, scheduling switch to sequencer mode")
 
-	// NOTE: Must use goroutine to avoid deadlock - onUpgrade is called from finalizeCommit,
-	// and consensusReactor.Stop() would try to stop the state that's currently running.
+	// Run in a goroutine: this callback executes inside finalizeCommit which
+	// runs on receiveRoutine. We must let receiveRoutine return before it can
+	// observe cs.Quit() and close cs.done. Calling consensusReactor.Stop()
+	// synchronously here would block on conS.Wait() — which waits for the very
+	// goroutine we are running on — and deadlock.
 	go func() {
-		// Wait a moment for finalizeCommit to complete
-		time.Sleep(100 * time.Millisecond)
+		// Wait until receiveRoutine has fully exited.
+		//
+		// cs.Stop() has already been called by finalizeCommit before invoking
+		// this callback (see consensus/state.go upgrade branch), so cs.Quit()
+		// is closed and receiveRoutine will hit the case <-cs.Quit() branch as
+		// soon as finalizeCommit returns. cs.done is closed at the very end of
+		// receiveRoutine. Waiting on it replaces the previous 100ms sleep with
+		// a deterministic synchronization point.
+		n.Logger.Info("Waiting for consensus state to drain...")
+		n.consensusState.Wait()
+		n.Logger.Info("Consensus state drained")
 
-		// Stop consensus reactor
-		n.Logger.Info("Stopping consensus reactor...")
+		// Stop consensus reactor through the standard BaseService.Stop path so
+		// its stopped flag is set; this prevents the P2P switch from invoking
+		// OnStop a second time during node shutdown. OnStop will call
+		// conS.Stop() (idempotent: returns ErrAlreadyStopped, logged only) and
+		// conS.Wait() (already satisfied since cs.done is closed).
+		n.Logger.Info("Stopping consensus reactor for upgrade...")
 		if err := n.consensusReactor.Stop(); err != nil {
 			n.Logger.Error("Failed to stop consensus reactor", "err", err)
 		}
 		n.Logger.Info("Consensus reactor stopped")
 
-		// Start broadcast reactor
+		// Start broadcast reactor for sequencer mode.
 		n.startSequencerMode()
 	}()
 }
