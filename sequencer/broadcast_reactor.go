@@ -721,8 +721,21 @@ func (r *BlockBroadcastReactor) removeSyncRequestsByPeer(peerID p2p.ID) {
 // banPeer adds a peer to the ban list for peerBanDuration.
 // The peer is also immediately stopped. Expired entries are lazily evicted on
 // the next isBanned call for the same peer.
+//
+// Persistent peers (whitelisted via [p2p].persistent_peers) are exempt: they
+// still get disconnected — so connection state is fully reset via RemovePeer
+// callbacks — but are NOT added to bannedPeers. The Switch will automatically
+// reconnect them, and on reconnect AddPeer's isBanned check will let them in.
 func (r *BlockBroadcastReactor) banPeer(peer p2p.Peer, reason string) {
 	peerID := peer.ID()
+
+	if peer.IsPersistent() {
+		r.logger.Error("[WHITELIST_ALARM] whitelisted peer misbehaved, will reconnect",
+			"peer", peerID, "reason", reason)
+		r.Switch.StopPeerForError(peer, fmt.Errorf("%s", reason))
+		return
+	}
+
 	r.bannedPeersMu.Lock()
 	r.bannedPeers[peerID] = time.Now().Add(peerBanDuration)
 	r.bannedPeersMu.Unlock()

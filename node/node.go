@@ -1170,6 +1170,11 @@ func (n *Node) OnStop() {
 			n.Logger.Error("problem closing statestore", "err", err)
 		}
 	}
+	if n.sigStore != nil {
+		if err := n.sigStore.Close(); err != nil {
+			n.Logger.Error("problem closing sigstore", "err", err)
+		}
+	}
 }
 
 // ConfigureRPC makes sure RPC has all the objects it needs to operate.

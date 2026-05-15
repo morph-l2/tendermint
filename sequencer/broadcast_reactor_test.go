@@ -5,7 +5,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/p2p"
+	"github.com/tendermint/tendermint/p2p/mock"
 )
 
 // newReactorForTest returns a BlockBroadcastReactor with only the fields
@@ -208,4 +210,67 @@ func TestReactorRateLimiter_UsesConstants(t *testing.T) {
 	}
 	// Next call must be denied (no time has elapsed for refill).
 	require.False(t, r.blockReqLimiter.Allow(peer))
+}
+
+// ----------------------------------------------------------------------------
+// banPeer whitelist exemption (persistent_peers)
+// ----------------------------------------------------------------------------
+
+// safeBanPeer drives banPeer with a nil Switch and absorbs the resulting
+// panic. We only care about the ban-list write side-effect: by the time
+// StopPeerForError runs (and panics on nil), the bannedPeers map has either
+// been written (non-persistent path) or skipped (persistent path), which is
+// exactly what we want to assert.
+func safeBanPeer(r *BlockBroadcastReactor, peer p2p.Peer, reason string) {
+	defer func() { _ = recover() }()
+	r.banPeer(peer, reason)
+}
+
+// TestBanPeer_PersistentPeerSkipsBanList: a peer with IsPersistent()==true
+// must NOT be added to bannedPeers — that is the central whitelist invariant.
+func TestBanPeer_PersistentPeerSkipsBanList(t *testing.T) {
+	r := newReactorForTest()
+	r.logger = log.NewNopLogger()
+
+	mp := mock.NewPeer(nil)
+	mp.Persistent = true
+
+	safeBanPeer(r, mp, "test signature failure")
+
+	_, present := r.bannedPeers[mp.ID()]
+	require.False(t, present, "persistent peer must be exempt from bannedPeers")
+}
+
+// TestBanPeer_NonPersistentPeerEntersBanList: regression — a peer with
+// IsPersistent()==false must follow the original code path and be added
+// to bannedPeers with a future expiry.
+func TestBanPeer_NonPersistentPeerEntersBanList(t *testing.T) {
+	r := newReactorForTest()
+	r.logger = log.NewNopLogger()
+
+	mp := mock.NewPeer(nil)
+	mp.Persistent = false
+
+	before := time.Now()
+	safeBanPeer(r, mp, "test signature failure")
+
+	expireAt, present := r.bannedPeers[mp.ID()]
+	require.True(t, present, "non-persistent peer must be added to bannedPeers")
+	require.True(t, expireAt.After(before.Add(peerBanDuration-time.Second)),
+		"ban expiry should be ~peerBanDuration in the future")
+}
+
+// TestBanPeer_PersistentPeerAddPeerNotRejected: the natural follow-up — a
+// persistent peer that has misbehaved before still passes AddPeer's
+// isBanned gate, so the Switch's automatic reconnect can re-add it.
+func TestBanPeer_PersistentPeerAddPeerNotRejected(t *testing.T) {
+	r := newReactorForTest()
+	r.logger = log.NewNopLogger()
+
+	mp := mock.NewPeer(nil)
+	mp.Persistent = true
+
+	safeBanPeer(r, mp, "decode failure")
+	require.False(t, r.isBanned(mp.ID()),
+		"persistent peer must not be considered banned after misbehavior")
 }

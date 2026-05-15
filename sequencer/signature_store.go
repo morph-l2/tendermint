@@ -49,3 +49,12 @@ func (s *SignatureStore) GetSignature(blockHash common.Hash) ([]byte, error) {
 	}
 	return val, nil
 }
+
+// Close releases the underlying DB. Safe to call on a nil receiver or when
+// the store was never initialized.
+func (s *SignatureStore) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Close()
+}
