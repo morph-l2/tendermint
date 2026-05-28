@@ -2,6 +2,7 @@ package blocksync
 
 import (
 	"fmt"
+	"net"
 	"testing"
 	"time"
 
@@ -11,12 +12,49 @@ import (
 	"github.com/tendermint/tendermint/libs/log"
 	tmrand "github.com/tendermint/tendermint/libs/rand"
 	"github.com/tendermint/tendermint/p2p"
+	"github.com/tendermint/tendermint/p2p/conn"
 	"github.com/tendermint/tendermint/types"
 )
 
 func init() {
 	peerTimeout = 2 * time.Second
 }
+
+// fakePeer is a minimal p2p.Peer implementation for SetPeerRange unit tests.
+// Only ID() and IsPersistent() are read by SetPeerRange; the rest are stubs.
+type fakePeer struct {
+	id         p2p.ID
+	persistent bool
+}
+
+func (p *fakePeer) ID() p2p.ID            { return p.id }
+func (p *fakePeer) IsPersistent() bool    { return p.persistent }
+func (p *fakePeer) IsOutbound() bool      { return false }
+func (p *fakePeer) RemoteIP() net.IP      { return nil }
+func (p *fakePeer) RemoteAddr() net.Addr  { return nil }
+func (p *fakePeer) CloseConn() error      { return nil }
+func (p *fakePeer) NodeInfo() p2p.NodeInfo {
+	return p2p.DefaultNodeInfo{DefaultNodeID: p.id}
+}
+func (p *fakePeer) Status() conn.ConnectionStatus { return conn.ConnectionStatus{} }
+func (p *fakePeer) SocketAddr() *p2p.NetAddress   { return nil }
+func (p *fakePeer) Send(byte, []byte) bool        { return true }
+func (p *fakePeer) TrySend(byte, []byte) bool     { return true }
+func (p *fakePeer) Set(string, interface{})       {}
+func (p *fakePeer) Get(string) interface{}        { return nil }
+func (p *fakePeer) FlushStop()                    {}
+func (p *fakePeer) Start() error                  { return nil }
+func (p *fakePeer) OnStart() error                { return nil }
+func (p *fakePeer) Stop() error                   { return nil }
+func (p *fakePeer) OnStop()                       {}
+func (p *fakePeer) Reset() error                  { return nil }
+func (p *fakePeer) OnReset() error                { return nil }
+func (p *fakePeer) IsRunning() bool               { return true }
+func (p *fakePeer) Quit() <-chan struct{}         { return nil }
+func (p *fakePeer) String() string                { return string(p.id) }
+func (p *fakePeer) SetLogger(log.Logger)          {}
+
+func mkPeer(id p2p.ID) p2p.Peer { return &fakePeer{id: id} }
 
 type testPeer struct {
 	id        p2p.ID
@@ -105,7 +143,7 @@ func TestBlockPoolBasic(t *testing.T) {
 	// the pool from spawning any requesters.
 	go func() {
 		for _, peer := range peers {
-			pool.SetPeerRange(peer.id, start, peer.height)
+			pool.SetPeerRange(mkPeer(peer.id), start, peer.height)
 		}
 	}()
 
@@ -167,7 +205,7 @@ func TestBlockPoolTimeout(t *testing.T) {
 	// the pool from spawning any requesters.
 	go func() {
 		for _, peer := range peers {
-			pool.SetPeerRange(peer.id, start, peer.height)
+			pool.SetPeerRange(mkPeer(peer.id), start, peer.height)
 		}
 	}()
 
@@ -228,7 +266,7 @@ func TestBlockPoolRemovePeer(t *testing.T) {
 
 	// add peers
 	for peerID, peer := range peers {
-		pool.SetPeerRange(peerID, peer.base, peer.height)
+		pool.SetPeerRange(mkPeer(peerID), peer.base, peer.height)
 	}
 	assert.EqualValues(t, 10, pool.MaxPeerHeight())
 
@@ -265,11 +303,11 @@ func TestSetPeerRange_DecreasingHeight(t *testing.T) {
 	pool.SetLogger(log.TestingLogger())
 
 	peerID := p2p.ID("malicious")
-	pool.SetPeerRange(peerID, 1, 1000)
+	pool.SetPeerRange(mkPeer(peerID), 1, 1000)
 	require.EqualValues(t, 1000, pool.MaxPeerHeight())
 	require.NotNil(t, pool.peers[peerID])
 
-	pool.SetPeerRange(peerID, 1, 1)
+	pool.SetPeerRange(mkPeer(peerID), 1, 1)
 	require.Nil(t, pool.peers[peerID], "peer must be removed after lowering height")
 	require.True(t, pool.isPeerBanned(peerID), "peer must be banned after lowering height")
 	require.EqualValues(t, 0, pool.MaxPeerHeight(),
@@ -287,10 +325,10 @@ func TestSetPeerRange_DecreasingBase(t *testing.T) {
 	pool.SetLogger(log.TestingLogger())
 
 	peerID := p2p.ID("malicious")
-	pool.SetPeerRange(peerID, 50, 1000)
+	pool.SetPeerRange(mkPeer(peerID), 50, 1000)
 	require.NotNil(t, pool.peers[peerID])
 
-	pool.SetPeerRange(peerID, 10, 1000)
+	pool.SetPeerRange(mkPeer(peerID), 10, 1000)
 	require.Nil(t, pool.peers[peerID], "peer must be removed after lowering base")
 	require.True(t, pool.isPeerBanned(peerID), "peer must be banned after lowering base")
 }
@@ -307,7 +345,7 @@ func TestSetPeerRange_BaseGreaterThanHeight(t *testing.T) {
 	pool.SetLogger(log.TestingLogger())
 
 	peerID := p2p.ID("malicious")
-	pool.SetPeerRange(peerID, 500, 100)
+	pool.SetPeerRange(mkPeer(peerID), 500, 100)
 	require.Nil(t, pool.peers[peerID], "peer with base > height must not be added")
 	require.True(t, pool.isPeerBanned(peerID))
 	require.EqualValues(t, 0, pool.MaxPeerHeight())
@@ -324,10 +362,10 @@ func TestBanPeer_PreventsReentry(t *testing.T) {
 	pool.SetLogger(log.TestingLogger())
 
 	peerID := p2p.ID("malicious")
-	pool.SetPeerRange(peerID, 500, 100)
+	pool.SetPeerRange(mkPeer(peerID), 500, 100)
 	require.True(t, pool.isPeerBanned(peerID))
 
-	pool.SetPeerRange(peerID, 1, 200)
+	pool.SetPeerRange(mkPeer(peerID), 1, 200)
 	require.Nil(t, pool.peers[peerID], "banned peer must not be re-added during ban window")
 	require.EqualValues(t, 0, pool.MaxPeerHeight())
 }
@@ -347,12 +385,12 @@ func TestBanPeer_ExpiryAllowsReentry(t *testing.T) {
 	pool.SetLogger(log.TestingLogger())
 
 	peerID := p2p.ID("rehabilitated")
-	pool.SetPeerRange(peerID, 500, 100)
+	pool.SetPeerRange(mkPeer(peerID), 500, 100)
 	require.True(t, pool.isPeerBanned(peerID))
 
 	time.Sleep(20 * time.Millisecond)
 
-	pool.SetPeerRange(peerID, 1, 200)
+	pool.SetPeerRange(mkPeer(peerID), 1, 200)
 	require.NotNil(t, pool.peers[peerID], "peer should be re-admitted after ban expiry")
 	require.False(t, pool.isPeerBanned(peerID))
 	require.EqualValues(t, 200, pool.MaxPeerHeight())
@@ -374,10 +412,10 @@ func TestBlockPoolMaxPeerHeightNotPoisonedByHighBase(t *testing.T) {
 	pool := NewBlockPool(200, requestsCh, errorsCh)
 	pool.SetLogger(log.TestingLogger())
 
-	pool.SetPeerRange(p2p.ID("honest"), 1, 200)
+	pool.SetPeerRange(mkPeer(p2p.ID("honest")), 1, 200)
 	require.EqualValues(t, 200, pool.MaxPeerHeight())
 
-	pool.SetPeerRange(p2p.ID("malicious"), 1_000_000, 1_000_100)
+	pool.SetPeerRange(mkPeer(p2p.ID("malicious")), 1_000_000, 1_000_100)
 	require.EqualValues(t, 200, pool.MaxPeerHeight(),
 		"malicious peer with base above pool.height must not raise maxPeerHeight")
 
@@ -396,8 +434,8 @@ func TestBlockPoolMaxPeerHeightRefreshesOnPopRequest(t *testing.T) {
 	pool := NewBlockPool(10, requestsCh, errorsCh)
 	pool.SetLogger(log.TestingLogger())
 
-	pool.SetPeerRange(p2p.ID("A"), 1, 20)
-	pool.SetPeerRange(p2p.ID("B"), 15, 100)
+	pool.SetPeerRange(mkPeer(p2p.ID("A")), 1, 20)
+	pool.SetPeerRange(mkPeer(p2p.ID("B")), 15, 100)
 	require.EqualValues(t, 20, pool.MaxPeerHeight(),
 		"peer B (base=15) must not contribute while pool.height (10) is below its base")
 
@@ -434,8 +472,8 @@ func TestSegmentedPeers_BoundaryDeadlockPrevention(t *testing.T) {
 	// the maxPeerHeight branch we want to exercise.
 	pool.startTime = time.Now().Add(-10 * time.Second)
 
-	pool.SetPeerRange(p2p.ID("A"), 1, 150)
-	pool.SetPeerRange(p2p.ID("B"), 151, 500)
+	pool.SetPeerRange(mkPeer(p2p.ID("A")), 1, 150)
+	pool.SetPeerRange(mkPeer(p2p.ID("B")), 151, 500)
 
 	require.EqualValues(t, 150, pool.MaxPeerHeight(),
 		"peer B must be filtered while its base (151) > pool.height (150)")

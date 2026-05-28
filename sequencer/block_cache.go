@@ -193,3 +193,20 @@ func (rb *BlockRingBuffer) RollbackTo(targetHeight uint64) {
 	defer rb.mtx.Unlock()
 	rb.rollbackTo(targetHeight)
 }
+
+// Clear drops every cached block. Used during a reactor reset (e.g. reorg
+// path via OnReset) when the chain head may have moved backwards and any
+// previously cached block could be off-chain. Subsequent Add() calls
+// repopulate the cache from the new head.
+func (rb *BlockRingBuffer) Clear() {
+	rb.mtx.Lock()
+	defer rb.mtx.Unlock()
+	for i := range rb.blocks {
+		rb.blocks[i] = nil
+	}
+	rb.byHeight = make(map[uint64]*BlockV2)
+	rb.byHash = make(map[common.Hash]*BlockV2)
+	rb.position = make(map[uint64]int)
+	rb.minHeight = 0
+	rb.maxHeight = 0
+}

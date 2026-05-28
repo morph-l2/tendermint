@@ -48,9 +48,6 @@ type StateV2 struct {
 
 	// Broadcast channel - non-HA self-produced blocks are sent here
 	broadcastCh chan *BlockV2
-
-	// Lifecycle
-	quitCh chan struct{}
 }
 
 // NewStateV2 creates a new StateV2 instance.
@@ -78,7 +75,6 @@ func NewStateV2(
 		fastBlockInterval: FastBlockInterval,
 		logger:            logger.With("module", "stateV2"),
 		broadcastCh:       make(chan *BlockV2, 100),
-		quitCh:            make(chan struct{}),
 	}
 
 	s.BaseService = *service.NewBaseService(logger, "StateV2", s)
@@ -125,12 +121,14 @@ func (s *StateV2) OnStart() error {
 // OnStop implements service.Service.
 func (s *StateV2) OnStop() {
 	s.logger.Info("Stopping StateV2")
-	close(s.quitCh)
 	if s.ha != nil {
 		s.ha.Stop()
 	}
 }
 
+func (s *StateV2) OnReset() error {
+	return nil
+}
 
 // roleCheckRoutine is the unified loop for role detection and block production.
 // It runs for all nodes with a signer (ActiveSequencer, HA-Leader, HA-Follower).
@@ -152,7 +150,7 @@ func (s *StateV2) roleCheckRoutine() {
 
 	for {
 		select {
-		case <-s.quitCh:
+		case <-s.Quit():
 			s.logger.Info("Role check routine stopped")
 			return
 
@@ -411,10 +409,4 @@ func (s *StateV2) HASubscribe() <-chan *BlockV2 {
 		panic("HASubscribe called but not in HA mode")
 	}
 	return s.ha.Subscribe()
-}
-
-// IsSequencerMode returns whether this node has a signer configured.
-// Deprecated: use HasSigner() instead. TODO: remove after all callers are updated.
-func (s *StateV2) IsSequencerMode() bool {
-	return s.signer != nil
 }

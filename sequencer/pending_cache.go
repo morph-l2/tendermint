@@ -136,3 +136,14 @@ func (c *PendingBlockCache) Size() int {
 	defer c.mtx.RUnlock()
 	return len(c.blocks)
 }
+
+// Clear drops every pending block. Used during reactor reset (reorg path):
+// after the chain head moves, previously cached future / fork blocks may
+// reference parents that no longer exist, so we discard the lot rather
+// than try to reconcile.
+func (c *PendingBlockCache) Clear() {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	c.blocks = make(map[common.Hash]*BlockV2)
+	c.byParent = make(map[common.Hash][]*BlockV2)
+}

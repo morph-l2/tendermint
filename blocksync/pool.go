@@ -345,11 +345,12 @@ func (pool *BlockPool) GetPeerIDs() []p2p.ID {
 //
 // In all non-malicious cases, maxPeerHeight is recomputed via
 // updateMaxPeerHeight, which filters peers whose base is above pool.height.
-func (pool *BlockPool) SetPeerRange(peerID p2p.ID, base int64, height int64) {
+func (pool *BlockPool) SetPeerRange(srcPeer p2p.Peer, base int64, height int64) {
+	peerID := srcPeer.ID()
 	pool.mtx.Lock()
 	defer pool.mtx.Unlock()
 
-	if base > height {
+	if base > height && !srcPeer.IsPersistent() {
 		pool.Logger.Info("Peer reporting base greater than height; banning",
 			"peer", peerID, "base", base, "height", height)
 		if _, exists := pool.peers[peerID]; exists {
@@ -361,7 +362,7 @@ func (pool *BlockPool) SetPeerRange(peerID p2p.ID, base int64, height int64) {
 
 	peer := pool.peers[peerID]
 	if peer != nil {
-		if height < peer.height || base < peer.base {
+		if (height < peer.height || base < peer.base) && !srcPeer.IsPersistent() {
 			pool.Logger.Info("Peer reporting decreasing height or base; removing and banning",
 				"peer", peerID,
 				"prevHeight", peer.height, "height", height,

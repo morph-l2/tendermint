@@ -71,7 +71,13 @@ type BlockBroadcastReactor struct {
 	p2p.BaseReactor
 
 	stateV2 *StateV2
-	pool    BlockPool
+
+	// poolMu guards pool. The blocksync reactor rebuilds its BlockPool on reorg
+	// (see blocksync.Reactor.SwitchToBlockSyncFromReorg) and pushes the new
+	// instance through SetPool, while peer-height lookups here run concurrently
+	// from message handlers.
+	poolMu sync.RWMutex
+	pool   BlockPool
 
 	recentBlocks *BlockRingBuffer   // Applied blocks for peer requests
 	pendingCache *PendingBlockCache // Pending blocks
@@ -150,6 +156,25 @@ func (r *BlockBroadcastReactor) SetLogger(l log.Logger) {
 	r.logger = l.With("module", "broadcastReactor")
 }
 
+// SetPool swaps the BlockPool reference used for peer-height lookups. The
+// blocksync reactor calls this after rebuilding its pool (e.g. during a reorg
+// restart) so that peer selection in this reactor follows the new pool's view
+// of peer heights instead of the dead pool's frozen state.
+func (r *BlockBroadcastReactor) SetPool(pool BlockPool) {
+	r.poolMu.Lock()
+	defer r.poolMu.Unlock()
+	r.pool = pool
+}
+
+// getPool returns the current pool reference under the read lock. Callers
+// hold a local copy of the interface value, which keeps the underlying pool
+// reachable for the duration of their call even if SetPool swaps it.
+func (r *BlockBroadcastReactor) getPool() BlockPool {
+	r.poolMu.RLock()
+	defer r.poolMu.RUnlock()
+	return r.pool
+}
+
 // OnStart is intentionally a no-op. Sequencer routines are NOT started by
 // the service lifecycle — they are started explicitly by
 // StartSequencerRoutines() which is invoked by:
@@ -167,6 +192,13 @@ func (r *BlockBroadcastReactor) OnStart() error {
 }
 
 func (r *BlockBroadcastReactor) StartSequencerRoutines() error {
+	// only make sure `isRunning()` is true
+	if !r.IsRunning() {
+		if err := r.Start(); err != nil {
+			return err
+		}
+	}
+
 	r.startMu.Lock()
 	defer r.startMu.Unlock()
 
@@ -198,6 +230,41 @@ func (r *BlockBroadcastReactor) StartSequencerRoutines() error {
 
 func (r *BlockBroadcastReactor) OnStop() {
 	r.logger.Info("Stopping BlockBroadcastReactor")
+
+	if err := r.stateV2.Stop(); err != nil {
+		r.logger.Error("failed to stop StateV2", "err", err)
+	}
+
+	r.startMu.Lock()
+	r.routinesStarted.Store(false)
+	r.startMu.Unlock()
+
+	r.bannedPeersMu.Lock()
+	r.bannedPeers = make(map[p2p.ID]time.Time)
+	r.bannedPeersMu.Unlock()
+
+	r.syncRequestsMu.Lock()
+	r.syncRequests = make(map[int64]*SyncReq)
+	r.syncPeerCounts = make(map[p2p.ID]int)
+	r.syncRequestsMu.Unlock()
+
+	r.recentBlocks.Clear()
+	r.pendingCache.Clear()
+	r.seenBlocks.Clear()
+	r.peerGossiped.Clear()
+}
+
+func (r *BlockBroadcastReactor) StopForReorg() error {
+	if r.IsRunning() {
+		if err := r.Stop(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *BlockBroadcastReactor) OnReset() error {
+	return r.stateV2.Reset()
 }
 
 func (r *BlockBroadcastReactor) GetChannels() []*p2p.ChannelDescriptor {
@@ -469,7 +536,7 @@ func (r *BlockBroadcastReactor) tryApplyFromCache() {
 // All sync requests go through this method (no longer uses blocksync pool)
 func (r *BlockBroadcastReactor) checkSyncGap() {
 	localHeight := r.stateV2.LatestHeight()
-	maxPeerHeight := r.pool.MaxPeerHeight()
+	maxPeerHeight := r.getPool().MaxPeerHeight()
 	gap := maxPeerHeight - localHeight
 	r.logger.Debug("Checking sync goroutines", "gap", gap, "localHeight", localHeight, "maxPeerHeight", maxPeerHeight)
 	if gap <= smallGapThreshold {
@@ -533,7 +600,7 @@ func (r *BlockBroadcastReactor) findPeerWithHeight(peers []p2p.Peer, height int6
 	start := rand.Intn(n) //nolint:gosec // non-security: peer selection randomization
 	for i := 0; i < n; i++ {
 		peer := peers[(start+i)%n]
-		if r.pool.GetPeerHeight(peer.ID()) >= height &&
+		if r.getPool().GetPeerHeight(peer.ID()) >= height &&
 			r.pendingSyncCountByPeer(peer.ID()) < maxPendingSyncPerPeer {
 			return peer
 		}
@@ -809,6 +876,7 @@ func (r *BlockBroadcastReactor) onBlockRequest(msg *bcproto.BlockRequest, src p2
 		} else {
 			r.logger.Error("Signature not found in store, sending block without signature",
 				"height", msg.Height, "hash", block.Hash.Hex(), "err", err)
+			return
 		}
 	}
 

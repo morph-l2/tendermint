@@ -3,6 +3,7 @@ package blocksync
 import (
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/tendermint/tendermint/l2node"
@@ -41,6 +42,11 @@ type consensusReactor interface {
 type sequencerReactor interface {
 	// for when we switch from blockchain reactor to sequencer mode
 	StartSequencerRoutines() error
+	// SetPool updates the peer-height pool reference used by the broadcast
+	// reactor. Called after a reorg rebuild so the broadcast reactor stops
+	// reading from the discarded pool. The argument is the *blocksync.BlockPool
+	// directly; it satisfies sequencer.BlockPool by structural typing.
+	SetPool(sequencer.BlockPool)
 }
 
 // SequencerState interface for accessing sequencer state (avoids import cycle)
@@ -73,8 +79,12 @@ type Reactor struct {
 	pool      *BlockPool
 	blockSync bool
 
-	requestsCh <-chan BlockRequest
-	errorsCh   <-chan peerError
+	// Bidirectional so the same buffers can be handed to a freshly-built BlockPool
+	// during reorg (see SwitchToBlockSyncFromReorg), while still being read here.
+	requestsCh chan BlockRequest
+	errorsCh   chan peerError
+
+	poolWg sync.WaitGroup
 
 	// Sequencer signature verification (set after upgrade via SetVerifier/SetSigStore)
 	verifier sequencer.SequencerVerifier
@@ -166,9 +176,17 @@ func (bcR *Reactor) OnStart() error {
 		if err != nil {
 			return err
 		}
-		go bcR.poolRoutine(false)
+		bcR.startPoolRoutine(false)
 	}
 	return nil
+}
+
+func (bcR *Reactor) startPoolRoutine(stateSynced bool) {
+	bcR.poolWg.Add(1)
+	go func() {
+		defer bcR.poolWg.Done()
+		bcR.poolRoutine(stateSynced)
+	}()
 }
 
 // SwitchToBlockSync is called by the state sync reactor when switching to block sync.
@@ -181,8 +199,47 @@ func (bcR *Reactor) SwitchToBlockSync(state sm.State) error {
 	if err != nil {
 		return err
 	}
-	go bcR.poolRoutine(true)
+	bcR.startPoolRoutine(true)
 	return nil
+}
+
+func (bcR *Reactor) StopForReorg() error {
+	if bcR.IsRunning() {
+		if err := bcR.Stop(); err != nil {
+			return err
+		}
+	}
+	bcR.poolWg.Wait()
+	return nil
+}
+
+// SwitchToBlockSyncFromReorg restarts block sync after a reorg by rebuilding
+// the BlockPool. currentHeight is the post-reorg head; the new pool will
+// request from currentHeight+1.
+//
+// Stop -> Reset -> swap pool -> Start, on the same reactor instance.
+//
+// Reset() requires the reactor to be in stopped state. It can legitimately
+// fail when the reactor was never started yet (e.g. early init paths,
+// certain test setups). Log the error rather than abort: continuing to
+// rebuild the pool and call Start() is the right recovery, and silent
+// `_ = bcR.Reset()` would hide genuine lifecycle drift bugs.
+func (bcR *Reactor) SwitchToBlockSyncFromReorg(currentHeight int64) error {
+	if err := bcR.Reset(); err != nil {
+		bcR.Logger.Error("reset blocksync reactor failed; continuing", "err", err)
+	}
+
+	bcR.pool = NewBlockPool(currentHeight+1, bcR.requestsCh, bcR.errorsCh)
+	bcR.pool.SetLogger(bcR.Logger)
+
+	// Point the sequencer broadcast reactor at the new pool so peer-height
+	// lookups stop reading the discarded one. Best-effort; in PBFT-only or
+	// test setups SEQUENCER may not be registered.
+	if seqR, ok := bcR.Switch.Reactor("SEQUENCER").(sequencerReactor); ok {
+		seqR.SetPool(bcR.pool)
+	}
+
+	return bcR.Start()
 }
 
 // OnStop implements service.Service.
@@ -193,6 +250,11 @@ func (bcR *Reactor) OnStop() {
 		}
 	}
 }
+
+// OnReset implements service.Service.
+// Pool is rebuilt explicitly in SwitchToBlockSyncFromReorg before Start, so
+// nothing to do here; kept only so BaseService.Reset() doesn't panic.
+func (bcR *Reactor) OnReset() error { return nil }
 
 // GetChannels implements Reactor
 func (bcR *Reactor) GetChannels() []*p2p.ChannelDescriptor {
@@ -411,7 +473,7 @@ func (bcR *Reactor) Receive(chID byte, src p2p.Peer, msgBytes []byte) {
 	case *bcproto.StatusResponse:
 		// Got a peer status. Unverified.
 		bcR.Logger.Debug("SetPeerRange", "peer", src.ID(), "base", msg.Base, "height", msg.Height)
-		bcR.pool.SetPeerRange(src.ID(), msg.Base, msg.Height)
+		bcR.pool.SetPeerRange(src, msg.Base, msg.Height)
 	case *bcproto.NoBlockResponse:
 		bcR.Logger.Debug("Peer does not have requested block", "peer", src, "height", msg.Height)
 	default:
@@ -428,10 +490,6 @@ func (bcR *Reactor) poolRoutine(stateSynced bool) {
 	trySyncTicker := time.NewTicker(trySyncIntervalMS * time.Millisecond)
 	defer trySyncTicker.Stop()
 
-	statusUpdateTicker := time.NewTicker(statusUpdateIntervalSeconds * time.Second)
-	// no longer stop the ticker, reuse it for sequencer mode status updates
-	//defer statusUpdateTicker.Stop()
-
 	switchToConsensusTicker := time.NewTicker(switchToConsensusIntervalSeconds * time.Second)
 	defer switchToConsensusTicker.Stop()
 
@@ -445,7 +503,12 @@ func (bcR *Reactor) poolRoutine(stateSynced bool) {
 
 	didProcessCh := make(chan struct{}, 1)
 
+	bcR.poolWg.Add(1)
 	go func() {
+		defer bcR.poolWg.Done()
+		statusUpdateTicker := time.NewTicker(statusUpdateIntervalSeconds * time.Second)
+		// no longer stop the ticker, reuse it for sequencer mode status updates
+		defer statusUpdateTicker.Stop()
 		for {
 			select {
 			case <-bcR.Quit():
@@ -704,12 +767,21 @@ func (bcR *Reactor) handleTheLastTMBlock(state sm.State, lastSyncable types.Sync
 
 func (bcR *Reactor) getHeight() int64 {
 	height := bcR.store.Height()
-	// In sequencer mode, get height directly from l2Node (geth)
-	if bcR.l2Node != nil && upgrade.IsUpgraded(height+1) {
+	if !upgrade.IsUpgraded(height + 1) {
+		return height
+	}
+	// In sequencer mode, get height from state v2 or L2 node
+	if bcR.stateV2 != nil {
+		if l2Height := bcR.stateV2.LatestHeight(); l2Height > height {
+			return l2Height
+		}
+	}
+
+	if bcR.l2Node != nil {
 		if l2Block, err := bcR.l2Node.GetLatestBlockV2(); err == nil && l2Block != nil {
 			bcR.Logger.Debug("StatusRequest", "l2Height", l2Block.Number)
 			if l2Height := int64(l2Block.Number); l2Height > height {
-				height = l2Height
+				return l2Height
 			}
 		}
 	}

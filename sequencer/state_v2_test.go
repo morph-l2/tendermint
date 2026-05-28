@@ -63,12 +63,12 @@ func newMockSequencerHA(leader bool) *mockSequencerHA {
 	}
 }
 
-func (m *mockSequencerHA) Start() error                          { return nil }
-func (m *mockSequencerHA) Stop()                                 {}
-func (m *mockSequencerHA) IsLeader() bool                        { return m.leader }
-func (m *mockSequencerHA) Join() error                           { return nil }
-func (m *mockSequencerHA) Commit(block *BlockV2) error           { return m.commitErr }
-func (m *mockSequencerHA) Subscribe() <-chan *BlockV2             { return m.subCh }
+func (m *mockSequencerHA) Start() error                              { return nil }
+func (m *mockSequencerHA) Stop()                                     {}
+func (m *mockSequencerHA) IsLeader() bool                            { return m.leader }
+func (m *mockSequencerHA) Join() error                               { return nil }
+func (m *mockSequencerHA) Commit(block *BlockV2) error               { return m.commitErr }
+func (m *mockSequencerHA) Subscribe() <-chan *BlockV2                { return m.subCh }
 func (m *mockSequencerHA) SetOnBlockApplied(fn func(*BlockV2) error) {}
 
 // newTestMockL2Node creates a mock L2Node for testing.
@@ -115,13 +115,13 @@ func TestStateV2_HasSigner_MatchesIsSequencerMode(t *testing.T) {
 
 	// Without signer
 	s1, _ := NewStateV2(mockL2Node, logger, mockVerifier, nil, nil, nil)
-	if s1.HasSigner() || s1.IsSequencerMode() {
+	if s1.HasSigner() {
 		t.Error("should be false when signer is nil")
 	}
 
 	// With signer
 	s2, _ := NewStateV2(mockL2Node, logger, mockVerifier, &mockSignerImpl{}, nil, nil)
-	if !s2.HasSigner() || !s2.IsSequencerMode() {
+	if !s2.HasSigner() {
 		t.Error("should be true when signer is provided")
 	}
 }

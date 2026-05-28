@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -141,6 +142,8 @@ type Option func(*Node)
 // See: https://github.com/tendermint/tendermint/issues/4595
 type blockSyncReactor interface {
 	SwitchToBlockSync(sm.State) error
+	StopForReorg() error
+	SwitchToBlockSyncFromReorg(int64) error
 }
 
 // CustomReactors allows you to add custom reactors (name -> p2p.Reactor) to
@@ -1092,6 +1095,19 @@ func (n *Node) OnStart() error {
 		return fmt.Errorf("could not dial peers from persistent_peers field: %w", err)
 	}
 
+	// Integration test hook: start a goroutine that periodically exercises
+	// the reorg start/stop path (Stop the blocksync reactor, then restart
+	// via SwitchToBlockSyncFromReorg). Only enabled when the env var is set,
+	// guarded inside runReorgRestartTestLoop to skip HA-enabled nodes and to
+	// wait until the upgrade height is crossed.
+	if v := os.Getenv("MORPH_TEST_REORG_RESTART_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			go n.runReorgRestartTestLoop(d)
+		} else {
+			n.Logger.Error("[REORG_TEST] invalid MORPH_TEST_REORG_RESTART_INTERVAL", "value", v, "err", err)
+		}
+	}
+
 	// Run state sync
 	if n.stateSync {
 		bcR, ok := n.bcReactor.(blockSyncReactor)
@@ -1642,6 +1658,11 @@ func (n *Node) switchToSequencerMode() {
 		n.consensusState.Wait()
 		n.Logger.Info("Consensus state drained")
 
+		// Belt-and-suspenders: ensure last PBFT votes / NewRoundStepMessage have
+		// time to flush to peers before we tear down the reactor's gossip routines.
+		// This compensates for tightened PBFT timeouts (timeout_precommit / commit).
+		time.Sleep(1 * time.Second)
+
 		// Stop consensus reactor through the standard BaseService.Stop path so
 		// its stopped flag is set; this prevents the P2P switch from invoking
 		// OnStop a second time during node shutdown. OnStop will call
@@ -1656,4 +1677,127 @@ func (n *Node) switchToSequencerMode() {
 		// Start broadcast reactor for sequencer mode.
 		n.startSequencerMode()
 	}()
+}
+
+// StopReactorsBeforeReorg stops the broadcast reactor and the blocksync reactor
+// in preparation for a derivation-driven reorg. After this returns, no goroutine
+// from either reactor is running and no new BlockResponseV2 / BlockRequest will
+// be processed. HA-enabled nodes (sequencers) are skipped — sequencers do not
+// participate in automatic reorg per docs/reorg/reorg兼容问题与优化.md.
+//
+// Order: broadcast first (stop applying new blocks via P2P), then blocksync
+// (stop sync requests). Each Stop is gated on IsRunning so this is idempotent
+// and safe to call when a reactor is already stopped or was never started.
+func (n *Node) StopReactorsBeforeReorg() error {
+	if n.ha != nil {
+		return nil
+	}
+
+	if err := n.blockBroadcastReactor.StopForReorg(); err != nil {
+		return err
+	}
+
+	bcR, ok := n.bcReactor.(blockSyncReactor)
+	if !ok {
+		return fmt.Errorf("this blockchain reactor does not support stopping for reorg")
+	}
+	if err := bcR.StopForReorg(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// StartReactorsAfterReorg restarts the blocksync and broadcast reactors after
+// a reorg, with the post-reorg head height as currentHeight. The blocksync
+// reactor rebuilds its BlockPool from currentHeight+1 and is responsible for
+// catching up the local node back to the network tip. Once caught up its
+// switchToConsensus tick re-invokes StartSequencerRoutines on the broadcast
+// reactor, which is brought back to a clean state by the Reset+Start below.
+//
+// Reset on a still-running reactor would fail with "can't reset running ..."
+// — Stop must precede it (handled by StopReactorsBeforeReorg). The IsRunning
+// check below makes this method idempotent in the rare case of partial state
+// (e.g., previous Stop returned an error).
+func (n *Node) StartReactorsAfterReorg(currentHeight int64) error {
+	if n.ha != nil {
+		return nil
+	}
+
+	bcR, ok := n.bcReactor.(blockSyncReactor)
+	if !ok {
+		return fmt.Errorf("this blockchain reactor does not support reorg restart")
+	}
+
+	// Reset() requires the reactor to be in stopped state. It can legitimately
+	// fail when the reactor was never started yet (e.g. very early init paths)
+	// or when StopReactorsBeforeReorg silently skipped Stop because the reactor
+	// wasn't running. Log and continue rather than abort the reorg flow —
+	// surfacing the error gives observability without blocking recovery.
+	if err := n.blockBroadcastReactor.Reset(); err != nil {
+		n.Logger.Error("reset broadcast reactor failed; continuing", "err", err)
+	}
+	return bcR.SwitchToBlockSyncFromReorg(currentHeight)
+}
+
+// testStartStopWhenReorg is the integration-test harness for the reorg
+// reactor lifecycle: drive a single Stop -> Start cycle and surface any
+// errors via logs.
+func (n *Node) testStartStopWhenReorg() {
+	if err := n.StopReactorsBeforeReorg(); err != nil {
+		n.Logger.Error("[REORG_TEST] StopReactorsBeforeReorg failed", "err", err)
+		return
+	}
+
+	time.Sleep(20 * time.Second)
+	if err := n.StartReactorsAfterReorg(n.stateV2.LatestHeight()); err != nil {
+		n.Logger.Error("[REORG_TEST] StartReactorsAfterReorg failed", "err", err)
+	}
+}
+
+// runReorgRestartTestLoop is an integration-test hook. When the env var
+// MORPH_TEST_REORG_RESTART_INTERVAL is set to a Go duration string (e.g. "5s"),
+// this loop fires testStartStopWhenReorg() at that cadence after the chain has
+// crossed the upgrade height. Used to verify that repeated Stop/Reset/Start of
+// the blocksync reactor on a fullnode does not break sync, leak goroutines, or
+// panic. Skips HA-enabled nodes (their StopReactorsBeforeReorg is a no-op).
+func (n *Node) runReorgRestartTestLoop(interval time.Duration) {
+	if n.ha != nil {
+		n.Logger.Info("[REORG_TEST] skipping on HA node")
+		return
+	}
+	n.Logger.Info("[REORG_TEST] waiting for upgrade height", "interval", interval)
+
+	for {
+		select {
+		case <-n.Quit():
+			return
+		case <-time.After(2 * time.Second):
+		}
+		if n.stateV2 == nil {
+			continue
+		}
+		h := n.stateV2.LatestHeight()
+		if h > 0 && upgrade.IsUpgraded(h+1) {
+			break
+		}
+	}
+
+	n.Logger.Info("[REORG_TEST] entering reorg-restart loop", "interval", interval)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	cycle := 0
+	for {
+		select {
+		case <-n.Quit():
+			n.Logger.Info("[REORG_TEST] loop stopped", "cycles", cycle)
+			return
+		case <-ticker.C:
+			cycle++
+			before := n.stateV2.LatestHeight()
+			n.Logger.Info("[REORG_TEST] cycle begin", "cycle", cycle, "height", before)
+			n.testStartStopWhenReorg()
+			after := n.stateV2.LatestHeight()
+			n.Logger.Info("[REORG_TEST] cycle end", "cycle", cycle, "heightBefore", before, "heightAfter", after)
+		}
+	}
 }
