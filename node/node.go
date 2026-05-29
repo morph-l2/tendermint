@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -1095,19 +1094,6 @@ func (n *Node) OnStart() error {
 		return fmt.Errorf("could not dial peers from persistent_peers field: %w", err)
 	}
 
-	// Integration test hook: start a goroutine that periodically exercises
-	// the reorg start/stop path (Stop the blocksync reactor, then restart
-	// via SwitchToBlockSyncFromReorg). Only enabled when the env var is set,
-	// guarded inside runReorgRestartTestLoop to skip HA-enabled nodes and to
-	// wait until the upgrade height is crossed.
-	if v := os.Getenv("MORPH_TEST_REORG_RESTART_INTERVAL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			go n.runReorgRestartTestLoop(d)
-		} else {
-			n.Logger.Error("[REORG_TEST] invalid MORPH_TEST_REORG_RESTART_INTERVAL", "value", v, "err", err)
-		}
-	}
-
 	// Run state sync
 	if n.stateSync {
 		bcR, ok := n.bcReactor.(blockSyncReactor)
@@ -1739,65 +1725,3 @@ func (n *Node) StartReactorsAfterReorg(currentHeight int64) error {
 	return bcR.SwitchToBlockSyncFromReorg(currentHeight)
 }
 
-// testStartStopWhenReorg is the integration-test harness for the reorg
-// reactor lifecycle: drive a single Stop -> Start cycle and surface any
-// errors via logs.
-func (n *Node) testStartStopWhenReorg() {
-	if err := n.StopReactorsBeforeReorg(); err != nil {
-		n.Logger.Error("[REORG_TEST] StopReactorsBeforeReorg failed", "err", err)
-		return
-	}
-
-	time.Sleep(20 * time.Second)
-	if err := n.StartReactorsAfterReorg(n.stateV2.LatestHeight()); err != nil {
-		n.Logger.Error("[REORG_TEST] StartReactorsAfterReorg failed", "err", err)
-	}
-}
-
-// runReorgRestartTestLoop is an integration-test hook. When the env var
-// MORPH_TEST_REORG_RESTART_INTERVAL is set to a Go duration string (e.g. "5s"),
-// this loop fires testStartStopWhenReorg() at that cadence after the chain has
-// crossed the upgrade height. Used to verify that repeated Stop/Reset/Start of
-// the blocksync reactor on a fullnode does not break sync, leak goroutines, or
-// panic. Skips HA-enabled nodes (their StopReactorsBeforeReorg is a no-op).
-func (n *Node) runReorgRestartTestLoop(interval time.Duration) {
-	if n.ha != nil {
-		n.Logger.Info("[REORG_TEST] skipping on HA node")
-		return
-	}
-	n.Logger.Info("[REORG_TEST] waiting for upgrade height", "interval", interval)
-
-	for {
-		select {
-		case <-n.Quit():
-			return
-		case <-time.After(2 * time.Second):
-		}
-		if n.stateV2 == nil {
-			continue
-		}
-		h := n.stateV2.LatestHeight()
-		if h > 0 && upgrade.IsUpgraded(h+1) {
-			break
-		}
-	}
-
-	n.Logger.Info("[REORG_TEST] entering reorg-restart loop", "interval", interval)
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	cycle := 0
-	for {
-		select {
-		case <-n.Quit():
-			n.Logger.Info("[REORG_TEST] loop stopped", "cycles", cycle)
-			return
-		case <-ticker.C:
-			cycle++
-			before := n.stateV2.LatestHeight()
-			n.Logger.Info("[REORG_TEST] cycle begin", "cycle", cycle, "height", before)
-			n.testStartStopWhenReorg()
-			after := n.stateV2.LatestHeight()
-			n.Logger.Info("[REORG_TEST] cycle end", "cycle", cycle, "heightBefore", before, "heightAfter", after)
-		}
-	}
-}
