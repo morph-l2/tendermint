@@ -27,8 +27,8 @@ const (
 	// within this much of the system time.
 	// stopSyncingDurationMinutes = 10
 
-	// ask for best height every 10s
-	statusUpdateIntervalSeconds = 10
+	// ask for best height every 5s
+	statusUpdateIntervalSeconds = 5
 	// check if we should switch to consensus reactor
 	switchToConsensusIntervalSeconds = 1
 )
@@ -570,6 +570,7 @@ FOR_LOOP:
 					bcR.Logger.Info("Switching to sequencer mode", "height", height)
 					seqR, ok := bcR.Switch.Reactor("SEQUENCER").(sequencerReactor)
 					if ok {
+						bcR.BroadcastStatusRequest()
 						if err := seqR.StartSequencerRoutines(); err != nil {
 							bcR.Logger.Error("Failed to start sequencer mode", "err", err)
 						}

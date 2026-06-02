@@ -22,7 +22,7 @@ const (
 	BlockBroadcastChannel = byte(0x50) // For block broadcast (requires signature verification)
 	SequencerSyncChannel  = byte(0x51) // For block sync requests (no signature verification)
 
-	smallGapThreshold    = 20   // Gap for direct block request
+	smallGapThreshold    = 10   // Gap for direct block request
 	recentBlocksCapacity = 1000 // Recent applied blocks cache
 	seenBlocksCapacity   = 2000 // Seen blocks for dedup
 	peerGossipedCapacity = 500  // Per-peer gossiped tracking
@@ -119,6 +119,8 @@ type BlockBroadcastReactor struct {
 	// across restarts.
 	bannedPeersMu sync.Mutex
 	bannedPeers   map[p2p.ID]time.Time
+
+	firstSync atomic.Bool
 }
 
 // NewBlockBroadcastReactor creates a new reactor. Routines are NOT started
@@ -202,6 +204,8 @@ func (r *BlockBroadcastReactor) StartSequencerRoutines() error {
 	r.startMu.Lock()
 	defer r.startMu.Unlock()
 
+	r.firstSync.Store(true)
+
 	if r.routinesStarted.Load() {
 		return nil
 	}
@@ -211,6 +215,10 @@ func (r *BlockBroadcastReactor) StartSequencerRoutines() error {
 			return fmt.Errorf("failed to start StateV2: %w", err)
 		}
 	}
+
+	// Open the Receive() gate: from this point on, incoming P2P messages
+	// will be processed instead of being silently dropped.
+	r.routinesStarted.Store(true)
 
 	// Fullnode (no signer): only applyRoutine (P2P sync)
 	// Nodes with signer (ActiveSeq / HA-Leader / HA-Follower): only broadcastRoutine
@@ -222,9 +230,6 @@ func (r *BlockBroadcastReactor) StartSequencerRoutines() error {
 		go r.applyRoutine()
 	}
 
-	// Open the Receive() gate: from this point on, incoming P2P messages
-	// will be processed instead of being silently dropped.
-	r.routinesStarted.Store(true)
 	return nil
 }
 
@@ -434,6 +439,10 @@ func (r *BlockBroadcastReactor) applyRoutine() {
 	defer tickerSync.Stop()
 	defer tickerApply.Stop()
 
+	// sync immediately
+	r.requestMissingBlocks(r.stateV2.LatestHeight()+1, r.getPool().MaxPeerHeight())
+	r.tryApplyFromCache()
+
 	for {
 		select {
 		case <-r.Quit():
@@ -539,7 +548,8 @@ func (r *BlockBroadcastReactor) checkSyncGap() {
 	maxPeerHeight := r.getPool().MaxPeerHeight()
 	gap := maxPeerHeight - localHeight
 	r.logger.Debug("Checking sync goroutines", "gap", gap, "localHeight", localHeight, "maxPeerHeight", maxPeerHeight)
-	if gap <= smallGapThreshold {
+	if gap <= smallGapThreshold &&
+		!r.firstSync.CompareAndSwap(true, false) {
 		return
 	}
 
