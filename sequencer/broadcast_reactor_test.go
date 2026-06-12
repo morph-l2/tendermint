@@ -274,3 +274,33 @@ func TestBanPeer_PersistentPeerAddPeerNotRejected(t *testing.T) {
 	require.False(t, r.isBanned(mp.ID()),
 		"persistent peer must not be considered banned after misbehavior")
 }
+
+// ----------------------------------------------------------------------------
+// L1 health gate on the sync path
+// ----------------------------------------------------------------------------
+
+func TestReceive_L1HaltDropsMessages(t *testing.T) {
+	// routinesStarted=true and L1 halted: Receive must drop the message at the
+	// L1 gate, before decode/verify/ban — so it must NOT panic even though
+	// stateV2/Switch are nil and the payload is garbage.
+	r := newReactorForTest()
+	r.logger = log.NewNopLogger()
+	r.routinesStarted.Store(true)
+	r.l1Tracker = &mockL1Tracker{halt: true}
+
+	require.NotPanics(t, func() {
+		r.Receive(BlockBroadcastChannel, nil, []byte("garbage"))
+	}, "Receive should drop messages at the L1 gate when halted, before decode")
+}
+
+func TestCheckSyncGap_L1HaltBlocksRequests(t *testing.T) {
+	// With L1 halted, checkSyncGap must return before calling
+	// stateV2.LatestHeight()/getPool() (both nil here) — so it must NOT panic.
+	r := newReactorForTest()
+	r.logger = log.NewNopLogger()
+	r.l1Tracker = &mockL1Tracker{halt: true}
+
+	require.NotPanics(t, func() {
+		r.checkSyncGap()
+	}, "checkSyncGap should early-return at the L1 gate before dereferencing nil pool/stateV2")
+}

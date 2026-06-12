@@ -78,3 +78,14 @@ type SequencerHA interface {
 	// Must be called before Start().
 	SetOnBlockApplied(fn func(*BlockV2) error)
 }
+
+// L1Tracker reports whether L1 RPC has fallen too far behind for this node to
+// safely act. When L1 is stale, the node may be blind to L1 SequencerUpdated
+// events, so the sequencer must stop producing and fullnodes must stop syncing
+// to avoid following a revoked sequencer. Implemented by the L1 tracker in the
+// node binary and required by StateV2 / the broadcast reactor.
+type L1Tracker interface {
+	// IsHalt reports whether L1 is stale enough that this node must halt block
+	// production and sync.
+	IsHalt() bool
+}

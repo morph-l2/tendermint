@@ -112,6 +112,7 @@ func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
 		DefaultMetricsProvider(config.Instrumentation),
 		logger,
 		nil, // sequencerVerifier
+		nil, // l1Tracker
 		nil, // sequencerSigner
 		nil, // ha: no HA in default node
 	)
@@ -503,6 +504,7 @@ func createSequencerComponents(
 	pool *bc.BlockPool,
 	logger log.Logger,
 	verifier sequencer.SequencerVerifier,
+	l1Tracker sequencer.L1Tracker,
 	signer sequencer.Signer,
 	sigStore *sequencer.SignatureStore,
 	ha sequencer.SequencerHA,
@@ -512,6 +514,7 @@ func createSequencerComponents(
 		l2Node,
 		logger,
 		verifier,
+		l1Tracker,
 		signer,
 		sigStore,
 		ha,
@@ -528,6 +531,7 @@ func createSequencerComponents(
 		stateV2,
 		logger,
 		verifier,
+		l1Tracker,
 		sigStore,
 	)
 	broadcastReactor.SetLogger(logger.With("module", "sequencer"))
@@ -783,6 +787,7 @@ func NewNode(
 	metricsProvider MetricsProvider,
 	logger log.Logger,
 	sequencerVerifier sequencer.SequencerVerifier,
+	l1Tracker sequencer.L1Tracker,
 	sequencerSigner sequencer.Signer,
 	ha sequencer.SequencerHA,
 	options ...Option,
@@ -1015,6 +1020,7 @@ func NewNode(
 			bcR.Pool(),
 			logger,
 			sequencerVerifier,
+			l1Tracker,
 			sequencerSigner,
 			sigStore,
 			ha, // HA service injected from NewNode caller; nil disables HA mode
@@ -1724,4 +1730,3 @@ func (n *Node) StartReactorsAfterReorg(currentHeight int64) error {
 	}
 	return bcR.SwitchToBlockSyncFromReorg(currentHeight)
 }
-

@@ -99,8 +99,9 @@ type BlockBroadcastReactor struct {
 	routinesStarted atomic.Bool
 	logger          log.Logger
 
-	verifier SequencerVerifier
-	sigStore *SignatureStore
+	verifier  SequencerVerifier
+	l1Tracker L1Tracker // required: gates peer-block sync on L1 freshness
+	sigStore  *SignatureStore
 
 	// syncRequests tracks pending sync channel requests, keyed by height.
 	// Used to reject unsolicited responses before decode/verification.
@@ -132,6 +133,7 @@ func NewBlockBroadcastReactor(
 	stateV2 *StateV2,
 	logger log.Logger,
 	verifier SequencerVerifier,
+	l1Tracker L1Tracker,
 	sigStore *SignatureStore,
 ) *BlockBroadcastReactor {
 	r := &BlockBroadcastReactor{
@@ -147,6 +149,7 @@ func NewBlockBroadcastReactor(
 		blockReqLimiter: NewPeerRateLimiter(blockRequestRateLimit, blockRequestBurst),
 		logger:          logger.With("module", "broadcastReactor"),
 		verifier:        verifier,
+		l1Tracker:       l1Tracker,
 		sigStore:        sigStore,
 	}
 	r.BaseReactor = *p2p.NewBaseReactor("BlockBroadcast", r)
@@ -301,6 +304,14 @@ func (r *BlockBroadcastReactor) Receive(chID byte, src p2p.Peer, msgBytes []byte
 	// or before the upgrade height has been reached — at that point StateV2
 	// is not yet initialized and we cannot validate or apply blocks.
 	if !r.routinesStarted.Load() {
+		return
+	}
+	// L1 tracker: while L1 is stale, drop all inbound P2P messages. We may be
+	// blind to L1 SequencerUpdated events, so we neither accept/verify peer
+	// blocks (verification uses the verifier's stale L1-derived sequencer set,
+	// which could let a revoked-sequencer block through or mis-ban honest peers)
+	// nor serve sync requests. Placed before decode so nothing is processed.
+	if r.l1Tracker.IsHalt() {
 		return
 	}
 	r.logger.Debug("Receive message", "chId", chID, "src", src.ID(), "len", len(msgBytes))
@@ -544,6 +555,11 @@ func (r *BlockBroadcastReactor) tryApplyFromCache() {
 // checkSyncGap: request missing blocks via SequencerSyncChannel
 // All sync requests go through this method (no longer uses blocksync pool)
 func (r *BlockBroadcastReactor) checkSyncGap() {
+	// L1 tracker: while L1 is stale, do not actively pull blocks from peers.
+	if r.l1Tracker.IsHalt() {
+		return
+	}
+
 	localHeight := r.stateV2.LatestHeight()
 	maxPeerHeight := r.getPool().MaxPeerHeight()
 	gap := maxPeerHeight - localHeight

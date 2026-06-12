@@ -179,6 +179,7 @@ func NewTendermint(app abci.Application, opts *Options) *nm.Node {
 		nm.DefaultMetricsProvider(config.Instrumentation),
 		logger,
 		nil, // sequencerVerifier
+		nil, // sequencerHealthGate
 		nil, // sequencerSigner
 		nil, // ha: no HA in RPC test node
 	)

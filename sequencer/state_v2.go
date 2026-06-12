@@ -35,12 +35,13 @@ type StateV2 struct {
 	latestBlock *BlockV2
 
 	// Dependencies
-	l2Node   l2node.L2Node
-	signer   Signer
-	verifier SequencerVerifier
-	sigStore *SignatureStore
-	ha       SequencerHA // nil = single-node mode
-	logger   log.Logger
+	l2Node    l2node.L2Node
+	signer    Signer
+	verifier  SequencerVerifier
+	l1Tracker L1Tracker // required: gates block production on L1 freshness
+	sigStore  *SignatureStore
+	ha        SequencerHA // nil = single-node mode
+	logger    log.Logger
 
 	// Block production
 	blockInterval     time.Duration // empty-block fallback interval (default 3s)
@@ -57,6 +58,7 @@ func NewStateV2(
 	l2Node l2node.L2Node,
 	logger log.Logger,
 	verifier SequencerVerifier,
+	l1Tracker L1Tracker,
 	signer Signer,
 	sigStore *SignatureStore,
 	ha SequencerHA,
@@ -69,6 +71,7 @@ func NewStateV2(
 		l2Node:            l2Node,
 		signer:            signer,
 		verifier:          verifier,
+		l1Tracker:         l1Tracker,
 		sigStore:          sigStore,
 		ha:                ha,
 		blockInterval:     BlockInterval,
@@ -200,6 +203,12 @@ func resetTimer(t *time.Timer, d time.Duration) {
 func (s *StateV2) isActiveSequencer() bool {
 	// HA mode: must be Raft leader
 	if s.ha != nil && !s.ha.IsLeader() {
+		return false
+	}
+
+	// L1 tracker: stop producing if L1 RPC is stale (we may be blind to
+	// SequencerUpdated events on L1 and could produce as a revoked sequencer).
+	if s.l1Tracker.IsHalt() {
 		return false
 	}
 
