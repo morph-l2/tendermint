@@ -134,6 +134,7 @@ func startNode(cfg *Config) error {
 		node.DefaultMetricsProvider(tmcfg.Instrumentation),
 		nodeLogger,
 		nil, // sequencerVerifier
+		nil, // sequencerHealthGate
 		nil, // sequencerSigner
 		nil, // ha: no HA in e2e test node
 	)
