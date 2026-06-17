@@ -81,7 +81,7 @@ func (conR *Reactor) OnStart() error {
 	if upgrade.IsUpgraded(conR.conS.Height) {
 		conR.Logger.Info("Already upgraded to sequencer mode, consensus reactor will not start",
 			"height", conR.conS.Height,
-			"upgradeHeight", upgrade.UpgradeBlockHeight)
+			"upgradeHeight", upgrade.UpgradeBlockHeight())
 		return nil
 	}
 

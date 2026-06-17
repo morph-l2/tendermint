@@ -34,7 +34,6 @@ func (m *mockSignerImpl) Address() common.Address {
 // mockSequencerVerifier is a mock implementation of SequencerVerifier for testing.
 type mockSequencerVerifier struct {
 	isSequencer bool
-	startHeight uint64
 	err         error
 }
 
@@ -43,10 +42,6 @@ func (m *mockSequencerVerifier) IsSequencerAt(addr common.Address, l2Height uint
 		return false, m.err
 	}
 	return m.isSequencer, nil
-}
-
-func (m *mockSequencerVerifier) VerificationStartHeight() uint64 {
-	return m.startHeight
 }
 
 // mockSequencerHA is a mock implementation of SequencerHA for testing.

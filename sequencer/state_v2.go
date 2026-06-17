@@ -12,7 +12,7 @@ import (
 
 const (
 	// BlockInterval is the fallback interval for empty blocks (no txs).
-	BlockInterval = 3000 * time.Millisecond
+	BlockInterval = 5000 * time.Millisecond
 	// FastBlockInterval is the txpool polling interval.
 	// When pending txs are found, a block is produced immediately.
 	FastBlockInterval = 300 * time.Millisecond

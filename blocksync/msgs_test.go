@@ -1,7 +1,6 @@
 package blocksync_test
 
 import (
-	"bytes"
 	"encoding/hex"
 	"math"
 	"math/big"
@@ -13,10 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tendermint/tendermint/blocksync"
-	"github.com/tendermint/tendermint/crypto"
 	bcproto "github.com/tendermint/tendermint/proto/tendermint/blocksync"
 	"github.com/tendermint/tendermint/types"
-	"github.com/tendermint/tendermint/upgrade"
 )
 
 func TestBcBlockRequestMessageValidateBasic(t *testing.T) {
@@ -84,65 +81,23 @@ func TestBcStatusResponseMessageValidateBasic(t *testing.T) {
 	}
 }
 
-func TestValidateMsgBlockResponseRejectsV1AtUpgradeHeight(t *testing.T) {
-	oldHeight := upgrade.UpgradeBlockHeight
-	upgrade.SetUpgradeBlockHeight(10)
-	defer upgrade.SetUpgradeBlockHeight(oldHeight)
-
-	lastBlockID := types.BlockID{
-		Hash: bytes.Repeat([]byte{1}, 32),
-		PartSetHeader: types.PartSetHeader{
-			Total: 1,
-			Hash:  bytes.Repeat([]byte{2}, 32),
-		},
-	}
-	lastCommit := types.NewCommit(9, 0, lastBlockID, []types.CommitSig{{
-		BlockIDFlag:      types.BlockIDFlagCommit,
-		ValidatorAddress: bytes.Repeat([]byte{3}, crypto.AddressSize),
-		Signature:        []byte{1},
-	}})
-
-	block := types.MakeBlock(10, []types.Tx{types.Tx("Hello World")}, nil, nil, nil, lastCommit, nil)
-	block.ProposerAddress = bytes.Repeat([]byte{4}, crypto.AddressSize)
-	bpb, err := block.ToProto()
-	require.NoError(t, err)
-
-	err = blocksync.ValidateMsg(&bcproto.BlockResponse{Block: bpb})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unexpected BlockResponse")
-}
-
-func TestValidateMsgBlockResponseV2RejectsPreUpgradeHeight(t *testing.T) {
-	oldHeight := upgrade.UpgradeBlockHeight
-	upgrade.SetUpgradeBlockHeight(10)
-	defer upgrade.SetUpgradeBlockHeight(oldHeight)
-
-	blockV2 := &types.BlockV2{
-		ParentHash: common.HexToHash("0x1"),
-		Hash:       common.HexToHash("0x2"),
-		BaseFee:    big.NewInt(1),
-		Number:     9,
-	}
-
-	err := blocksync.ValidateMsg(&bcproto.BlockResponseV2{Block: types.BlockV2ToProto(blockV2)})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unexpected BlockResponseV2")
-}
-
-func TestValidateMsgBlockResponseV2AllowsUpgradeHeight(t *testing.T) {
-	oldHeight := upgrade.UpgradeBlockHeight
-	upgrade.SetUpgradeBlockHeight(10)
-	defer upgrade.SetUpgradeBlockHeight(oldHeight)
-
+// ValidateMsg validates block responses structurally only. The old "reject V1/V2 by upgrade
+// height" checks were removed: the timestamp-driven boundary is unknown at message-validation
+// time, so the blocksync reactor guards the V1/V2 type at consume time instead. A structurally
+// valid block passes regardless of height; a malformed one is rejected.
+func TestValidateMsgBlockResponseV2Structural(t *testing.T) {
 	blockV2 := &types.BlockV2{
 		ParentHash: common.HexToHash("0x1"),
 		Hash:       common.HexToHash("0x2"),
 		BaseFee:    big.NewInt(1),
 		Number:     10,
 	}
+	require.NoError(t, blocksync.ValidateMsg(&bcproto.BlockResponseV2{Block: types.BlockV2ToProto(blockV2)}))
 
-	err := blocksync.ValidateMsg(&bcproto.BlockResponseV2{Block: types.BlockV2ToProto(blockV2)})
-	require.NoError(t, err)
+	// Malformed V2 (bad hash length) -> rejected by structural validation.
+	bad := types.BlockV2ToProto(blockV2)
+	bad.Hash = []byte{0x1, 0x2}
+	require.Error(t, blocksync.ValidateMsg(&bcproto.BlockResponseV2{Block: bad}))
 }
 
 //nolint:lll // ignore line length in tests

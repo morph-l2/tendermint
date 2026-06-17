@@ -1809,10 +1809,13 @@ func (cs *State) finalizeCommit(height int64) {
 	}
 
 	// Check for upgrade to sequencer mode
-	if upgrade.IsUpgraded(cs.Height) {
-		logger.Info("Upgrade height reached, switching to sequencer mode",
-			"height", cs.Height,
-			"upgradeHeight", upgrade.UpgradeBlockHeight)
+	if upgrade.IsUpgradedByTs(block.Time.UnixMilli()) {
+		// persistent the upgradeHeight, load it into upgradeHeight when startup
+		upgrade.SetUpgradeBlockHeight(height)
+
+		logger.Info("Upgrade time reached, switching to sequencer mode",
+			"height", height,
+			"upgradeTime", upgrade.UpgradeBlockTime())
 
 		// Stop consensus state first.
 		//

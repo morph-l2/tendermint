@@ -2,10 +2,9 @@ package types
 
 import (
 	"errors"
-	"math/big"
-
 	"github.com/morph-l2/go-ethereum/common"
 	seqproto "github.com/tendermint/tendermint/proto/tendermint/sequencer"
+	"math/big"
 )
 
 // BlockV2 represents the block format after upgrade to centralized sequencer mode.
@@ -49,11 +48,26 @@ func (b *BlockV2) GetHash() []byte {
 	return b.Hash.Bytes()
 }
 
+func (b *BlockV2) GetTime() int64 { return 0 }
+
+func (b *BlockV2) GetBlockVersion() BlockVersion { return Version2 }
+
+// BlockVersion identifies the wire format of a SyncableBlock: Version1 is the
+// PBFT-era tendermint block, Version2 is the post-upgrade sequencer block.
+type BlockVersion uint8
+
+const (
+	Version1 BlockVersion = 1
+	Version2 BlockVersion = 2
+)
+
 // SyncableBlock is an interface that both old Block and new BlockV2 can implement
 // for compatibility in the block pool.
 type SyncableBlock interface {
 	GetHeight() int64
 	GetHash() []byte
+	GetTime() int64
+	GetBlockVersion() BlockVersion
 }
 
 // Ensure BlockV2 implements SyncableBlock

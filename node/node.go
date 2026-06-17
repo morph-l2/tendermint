@@ -804,6 +804,14 @@ func NewNode(
 		sm.StoreOptions{DiscardABCIResponses: config.Storage.DiscardABCIResponses},
 	)
 
+	// Restore the persisted sequencer-upgrade boundary (if any) and wire the store so future
+	// SetUpgradeBlockHeight calls (finalizeCommit / blocksync) persist it automatically.
+	// A DB read failure here is fatal: booting with a reset boundary would let the node
+	// re-run PBFT past the upgrade.
+	if err := upgrade.SetStore(stateDB); err != nil {
+		return nil, err
+	}
+
 	state, genDoc, err := LoadStateFromDBOrGenesisDocProvider(stateDB, genesisDocProvider)
 	if err != nil {
 		return nil, err
