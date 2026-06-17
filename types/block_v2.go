@@ -48,7 +48,7 @@ func (b *BlockV2) GetHash() []byte {
 	return b.Hash.Bytes()
 }
 
-func (b *BlockV2) GetTime() int64 { return int64(b.Timestamp) }
+func (b *BlockV2) GetTime() int64 { return int64(b.Timestamp) * 1000 }
 
 func (b *BlockV2) GetBlockVersion() BlockVersion { return Version2 }
 
