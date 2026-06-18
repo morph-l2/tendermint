@@ -380,24 +380,44 @@ func (bcR *Reactor) L2Node() l2node.L2Node {
 	return bcR.l2Node
 }
 
+// verifyBlockV2 asserts block is a *types.BlockV2 and verifies its sequencer signature
+// (history-aware lookup via IsSequencerAt). Pure check: no pool side effects — the caller
+// decides what to redo/ban. Shared by the boundary check and syncBlockV2.
+func (bcR *Reactor) verifyBlockV2(block types.SyncableBlock) (*types.BlockV2, error) {
+	blockV2, ok := block.(*types.BlockV2)
+	if !ok {
+		return nil, fmt.Errorf("expected BlockV2 at height %d, got V1", block.GetHeight())
+	}
+	if err := sequencer.VerifyBlockSignature(bcR.verifier, blockV2); err != nil {
+		return nil, fmt.Errorf("block signature verification failed at height %d: %w", blockV2.GetHeight(), err)
+	}
+	return blockV2, nil
+}
+
+// redoAndBan re-queues the block's height and disconnects the peer that served it.
+// Single-block granularity: the PBFT path bans only the mismatched block, while the
+// one-time boundary check calls it for both blocks.
+func (bcR *Reactor) redoAndBan(block types.SyncableBlock, reason string) {
+	bcR.Logger.Error("blocksync redo+ban", "height", block.GetHeight(), "reason", reason)
+	peerID := bcR.pool.RedoRequest(block.GetHeight())
+	if peer := bcR.Switch.Peers().Get(peerID); peer != nil {
+		bcR.Switch.StopPeerForError(peer, fmt.Errorf("blocksync: %s", reason))
+	}
+}
+
 // syncBlockV2 handles syncing a single BlockV2 in sequencer mode.
 // Verifies block signature using the history-aware verifier, then applies.
 func (bcR *Reactor) syncBlockV2(block types.SyncableBlock, blocksSynced *uint64, lastRate *float64, lastHundred *time.Time) bool {
-	blockV2, ok := block.(*types.BlockV2)
-	if !ok {
-		bcR.Logger.Error("Expected BlockV2 after upgrade", "height", block.GetHeight())
-		bcR.pool.RedoRequest(block.GetHeight())
+	blockV2, err := bcR.verifyBlockV2(block)
+	if err != nil {
+		// Wrong type or bad signature == the peer served bad/forged data: redo + ban.
+		bcR.redoAndBan(block, fmt.Sprintf("BlockV2 verification failed: %v", err))
 		return false
 	}
 
-	// Verify block signature (uses IsSequencerAt with history-aware lookup)
-	if err := sequencer.VerifyBlockSignature(bcR.verifier, blockV2); err != nil {
-		bcR.Logger.Error("Block signature verification failed", "height", blockV2.Number, "err", err)
-		bcR.pool.RedoRequest(blockV2.GetHeight())
-		return false
-	}
-
-	// Apply BlockV2 via stateV2
+	// Apply BlockV2 via stateV2. The block is already signature-verified (authentic), so an
+	// apply failure is almost always a local issue (geth state), not the peer's fault — redo
+	// without banning to avoid dropping honest peers during a local hiccup.
 	if err := bcR.stateV2.ApplyBlock(blockV2); err != nil {
 		bcR.Logger.Error("Failed to apply BlockV2", "height", blockV2.Number, "err", err)
 		bcR.pool.RedoRequest(blockV2.GetHeight())
@@ -612,18 +632,9 @@ FOR_LOOP:
 				didProcessCh <- struct{}{}
 			}
 
-			if firstSync.GetHeight()+1 == upgrade.UpgradeBlockHeight {
-				if err := bcR.handleTheLastTMBlock(state, firstSync); err != nil {
-					bcR.Logger.Error("Error in apply last tendermint block", "err", err)
-					peerID := bcR.pool.RedoRequest(firstSync.GetHeight())
-					peer := bcR.Switch.Peers().Get(peerID)
-					if peer != nil {
-						bcR.Switch.StopPeerForError(peer, fmt.Errorf("handleTheLastTMBlock error: %v", err))
-					}
-					continue FOR_LOOP
-				}
-				bcR.pool.PopRequest()
-				blocksSynced++
+			// Detect and process the last PBFT block at the timestamp-driven upgrade
+			// boundary (runs at most once; no-op after the boundary height is recorded).
+			if bcR.checkAndHandleTheLastTMBlock(state, firstSync, secondSync, &blocksSynced) {
 				continue FOR_LOOP
 			}
 
@@ -633,8 +644,20 @@ FOR_LOOP:
 				continue FOR_LOOP
 			}
 
-			// PBFT mode: type assert to *types.Block
-			first, second := firstSync.(*types.Block), secondSync.(*types.Block)
+			// PBFT mode: both blocks must be V1. A peer that serves a V2 block in this
+			// range is malicious or on a bad fork — ban only the mismatched one(s) (this
+			// is the hot path; avoid false-banning the peer that served a correct block).
+			first, ok1 := firstSync.(*types.Block)
+			second, ok2 := secondSync.(*types.Block)
+			if !ok1 || !ok2 {
+				if !ok1 {
+					bcR.redoAndBan(firstSync, "expected V1 block in PBFT range")
+				}
+				if !ok2 {
+					bcR.redoAndBan(secondSync, "expected V1 block in PBFT range")
+				}
+				continue FOR_LOOP
+			}
 
 			firstParts, err := first.MakePartSet(types.BlockPartSizeBytes)
 			if err != nil {
@@ -727,10 +750,34 @@ func (bcR *Reactor) BroadcastStatusRequest() error {
 	return nil
 }
 
-// just skip the last tendermint block commit check.
-// TODO: consider add the commit check in the future or using batch derivation reorg
+func (bcR *Reactor) checkAndHandleTheLastTMBlock(state sm.State, first, second types.SyncableBlock, blocksSynced *uint64) bool {
+	if upgrade.UpgradeBlockHeight() >= 0 {
+		return false // boundary already discovered; only runs once
+	}
+	if first.GetBlockVersion() != types.Version1 || !upgrade.IsUpgradedByTs(first.GetTime()) {
+		return false // not the boundary; fall through to the normal sync paths
+	}
+	if _, err := bcR.verifyBlockV2(second); err != nil {
+		bcR.redoAndBan(first, fmt.Sprintf("boundary check failed: %v", err))
+		bcR.redoAndBan(second, fmt.Sprintf("boundary: second must be a valid V2 block: %v", err))
+		return true
+	}
+	if err := bcR.handleTheLastTMBlock(state, first); err != nil {
+		bcR.redoAndBan(first, fmt.Sprintf("apply last tendermint block: %v", err))
+		bcR.redoAndBan(second, fmt.Sprintf("boundary rolled back after first failed: %v", err))
+		return true
+	}
+	upgrade.SetUpgradeBlockHeight(first.GetHeight())
+	bcR.pool.PopRequest()
+	*blocksSynced++
+	return true
+}
+
 func (bcR *Reactor) handleTheLastTMBlock(state sm.State, lastSyncable types.SyncableBlock) error {
-	last := lastSyncable.(*types.Block)
+	last, ok := lastSyncable.(*types.Block)
+	if !ok {
+		return fmt.Errorf("handleTheLastTMBlock: expected V1 block at height %d", lastSyncable.GetHeight())
+	}
 	lastParts, err := last.MakePartSet(types.BlockPartSizeBytes)
 	if err != nil {
 		bcR.Logger.Error(

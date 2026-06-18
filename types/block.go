@@ -59,6 +59,10 @@ func (b *Block) GetHash() []byte {
 	return b.Hash().Bytes()
 }
 
+func (b *Block) GetTime() int64 { return b.Header.Time.UnixMilli() }
+
+func (b *Block) GetBlockVersion() BlockVersion { return Version1 }
+
 // Ensure Block implements SyncableBlock
 var _ SyncableBlock = (*Block)(nil)
 

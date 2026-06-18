@@ -25,11 +25,6 @@ var (
 type SequencerVerifier interface {
 	// IsSequencerAt checks if addr was the valid sequencer at the given L2 block height.
 	IsSequencerAt(addr common.Address, l2Height uint64) (bool, error)
-
-	// VerificationStartHeight returns the L2 block height from which V2 signature
-	// verification is enforced (= upgradeBlockHeight). Blocks below this height are
-	// PBFT blocks and skip V2 verification. Returns math.MaxUint64 if not configured.
-	VerificationStartHeight() uint64
 }
 
 // Signer interface for sequencer block signing
