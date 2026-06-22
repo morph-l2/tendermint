@@ -335,11 +335,14 @@ func (pool *BlockPool) GetPeerIDs() []p2p.ID {
 // It also enforces basic sanity checks against malicious or buggy peers
 // (see spec-003-blocksync-malicious-peer-fix):
 //
-//   - A peer reporting base > height is structurally impossible and is banned
+//   - A peer reporting base > height is structurally impossible and is rejected
 //     (CometBFT issue #5801 hardening).
 //   - An existing peer reporting a strictly lower height or base than what it
-//     reported previously is removed from the pool and banned to prevent
+//     reported previously is removed from the pool to prevent
 //     poisoning of maxPeerHeight (CVE-2025-24371).
+//   - Non-persistent peers that report invalid ranges are also banned.
+//     Persistent peers are removed but not added to bannedPeers so the switch
+//     can reconnect them later without accepting the invalid range.
 //   - A peer that has been banned recently is silently ignored if it tries to
 //     re-introduce itself before its ban expires.
 //
@@ -350,25 +353,29 @@ func (pool *BlockPool) SetPeerRange(srcPeer p2p.Peer, base int64, height int64) 
 	pool.mtx.Lock()
 	defer pool.mtx.Unlock()
 
-	if base > height && !srcPeer.IsPersistent() {
-		pool.Logger.Info("Peer reporting base greater than height; banning",
+	if base > height {
+		pool.Logger.Info("Peer reporting base greater than height; removing",
 			"peer", peerID, "base", base, "height", height)
 		if _, exists := pool.peers[peerID]; exists {
 			pool.removePeer(peerID)
 		}
-		pool.banPeer(peerID)
+		if !srcPeer.IsPersistent() {
+			pool.banPeer(peerID)
+		}
 		return
 	}
 
 	peer := pool.peers[peerID]
 	if peer != nil {
-		if (height < peer.height || base < peer.base) && !srcPeer.IsPersistent() {
-			pool.Logger.Info("Peer reporting decreasing height or base; removing and banning",
+		if height < peer.height || base < peer.base {
+			pool.Logger.Info("Peer reporting decreasing height or base; removing",
 				"peer", peerID,
 				"prevHeight", peer.height, "height", height,
 				"prevBase", peer.base, "base", base)
 			pool.removePeer(peerID)
-			pool.banPeer(peerID)
+			if !srcPeer.IsPersistent() {
+				pool.banPeer(peerID)
+			}
 			return
 		}
 		peer.base = base
