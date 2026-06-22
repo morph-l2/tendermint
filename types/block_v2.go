@@ -90,7 +90,7 @@ func BlockV2FromProto(pb *seqproto.BlockV2) (*BlockV2, error) {
 		return nil, errors.New("invalid block hash length")
 	}
 
-	if len(pb.Signature) > 0 && len(pb.Signature) != crypto.SignatureLength {
+	if len(pb.Signature) != crypto.SignatureLength {
 		return nil, fmt.Errorf("invalid signature length: got %d, want %d", len(pb.Signature), crypto.SignatureLength)
 	}
 
