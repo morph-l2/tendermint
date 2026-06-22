@@ -6,7 +6,8 @@ import (
 	"github.com/morph-l2/go-ethereum/common"
 )
 
-// HashSet is a fixed-capacity set for common.Hash with LRU eviction.
+// HashSet is a fixed-capacity set for common.Hash with FIFO eviction
+// (insertion-order ring buffer; entries are not re-ordered on access).
 type HashSet struct {
 	items    []common.Hash
 	index    map[common.Hash]int
