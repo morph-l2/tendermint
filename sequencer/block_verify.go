@@ -80,8 +80,9 @@ func VerifyBlockSignature(verifier SequencerVerifier, block *BlockV2) error {
 		return fmt.Errorf("%w: verifier not configured", ErrVerifierUnavailable)
 	}
 
-	if len(block.Signature) == 0 {
-		return fmt.Errorf("%w: missing signature at height %d", ErrInvalidSignature, block.Number)
+	if len(block.Signature) != crypto.SignatureLength {
+		return fmt.Errorf("%w: invalid signature length %d (want %d) at height %d",
+			ErrInvalidSignature, len(block.Signature), crypto.SignatureLength, block.Number)
 	}
 
 	computedHash, err := computeBlockHash(block)

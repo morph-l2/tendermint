@@ -2,9 +2,12 @@ package types
 
 import (
 	"errors"
-	"github.com/morph-l2/go-ethereum/common"
-	seqproto "github.com/tendermint/tendermint/proto/tendermint/sequencer"
+	"fmt"
 	"math/big"
+
+	"github.com/morph-l2/go-ethereum/common"
+	"github.com/morph-l2/go-ethereum/crypto"
+	seqproto "github.com/tendermint/tendermint/proto/tendermint/sequencer"
 )
 
 // BlockV2 represents the block format after upgrade to centralized sequencer mode.
@@ -85,6 +88,10 @@ func BlockV2FromProto(pb *seqproto.BlockV2) (*BlockV2, error) {
 	}
 	if len(pb.Hash) != 32 {
 		return nil, errors.New("invalid block hash length")
+	}
+
+	if len(pb.Signature) != crypto.SignatureLength {
+		return nil, fmt.Errorf("invalid signature length: got %d, want %d", len(pb.Signature), crypto.SignatureLength)
 	}
 
 	baseFee := new(big.Int)

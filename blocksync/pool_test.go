@@ -55,6 +55,9 @@ func (p *fakePeer) String() string                { return string(p.id) }
 func (p *fakePeer) SetLogger(log.Logger)          {}
 
 func mkPeer(id p2p.ID) p2p.Peer { return &fakePeer{id: id} }
+func mkPersistentPeer(id p2p.ID) p2p.Peer {
+	return &fakePeer{id: id, persistent: true}
+}
 
 type testPeer struct {
 	id        p2p.ID
@@ -349,6 +352,39 @@ func TestSetPeerRange_BaseGreaterThanHeight(t *testing.T) {
 	require.Nil(t, pool.peers[peerID], "peer with base > height must not be added")
 	require.True(t, pool.isPeerBanned(peerID))
 	require.EqualValues(t, 0, pool.MaxPeerHeight())
+}
+
+func TestSetPeerRange_PersistentPeerInvalidRangeRemovedButNotBanned(t *testing.T) {
+	requestsCh := make(chan BlockRequest, 10)
+	errorsCh := make(chan peerError, 10)
+
+	pool := NewBlockPool(1, requestsCh, errorsCh)
+	pool.SetLogger(log.TestingLogger())
+
+	peerID := p2p.ID("persistent-invalid")
+	pool.SetPeerRange(mkPersistentPeer(peerID), 500, 100)
+	require.Nil(t, pool.peers[peerID], "persistent peer with base > height must not be added")
+	require.False(t, pool.isPeerBanned(peerID), "persistent peer must not be written to bannedPeers")
+	require.EqualValues(t, 0, pool.MaxPeerHeight())
+}
+
+func TestSetPeerRange_PersistentPeerDecreasingHeightRemovedButNotBanned(t *testing.T) {
+	requestsCh := make(chan BlockRequest, 10)
+	errorsCh := make(chan peerError, 10)
+
+	pool := NewBlockPool(1, requestsCh, errorsCh)
+	pool.SetLogger(log.TestingLogger())
+
+	peerID := p2p.ID("persistent-decreasing")
+	pool.SetPeerRange(mkPersistentPeer(peerID), 1, 1000)
+	require.EqualValues(t, 1000, pool.MaxPeerHeight())
+	require.NotNil(t, pool.peers[peerID])
+
+	pool.SetPeerRange(mkPersistentPeer(peerID), 1, 1)
+	require.Nil(t, pool.peers[peerID], "persistent peer must be removed after lowering height")
+	require.False(t, pool.isPeerBanned(peerID), "persistent peer must not be written to bannedPeers")
+	require.EqualValues(t, 0, pool.MaxPeerHeight(),
+		"maxPeerHeight must drop to 0 once the invalid persistent peer is removed")
 }
 
 // TestBanPeer_PreventsReentry verifies that a banned peer cannot reintroduce

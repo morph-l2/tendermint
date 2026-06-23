@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/morph-l2/go-ethereum/common"
 	tmjson "github.com/tendermint/tendermint/libs/json"
 	tmos "github.com/tendermint/tendermint/libs/os"
 	tmrand "github.com/tendermint/tendermint/libs/rand"
@@ -14,8 +15,9 @@ var _ L2Node = &MockL2Node{}
 
 type MockL2Node struct {
 	TxNumber         int
-	ValidatorSetFile string // used to control the validator set updates
-	maxAppliedHeight uint64 // tracks highest block applied (for V2 idempotent check)
+	ValidatorSetFile string      // used to control the validator set updates
+	maxAppliedHeight uint64      // tracks highest block applied (for V2 idempotent check)
+	maxAppliedHash   common.Hash // hash at maxAppliedHeight, so same-height reorg blocks aren't skipped
 }
 
 func NewMockL2Node(n int, validatorSetFile string) L2Node {
@@ -141,10 +143,15 @@ func (l *MockL2Node) RequestBlockDataV2(parentHash []byte) (*BlockV2, bool, erro
 }
 
 func (l *MockL2Node) ApplyBlockV2(block *BlockV2) (bool, error) {
-	if block.Number <= l.maxAppliedHeight {
-		return false, nil // idempotent skip
+	// Skip only a true duplicate (same height AND same hash). A same-height
+	// block with a different hash is a reorg and must be applied; otherwise
+	// reorg unit tests get false-positive passes.
+	if block.Number < l.maxAppliedHeight ||
+		(block.Number == l.maxAppliedHeight && block.Hash == l.maxAppliedHash) {
+		return false, nil
 	}
 	l.maxAppliedHeight = block.Number
+	l.maxAppliedHash = block.Hash
 	return true, nil
 }
 

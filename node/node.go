@@ -246,24 +246,36 @@ type Node struct {
 }
 
 func initDBs(config *cfg.Config, dbProvider DBProvider) (blockStore *store.BlockStore, stateDB dbm.DB, sigStore *sequencer.SignatureStore, err error) {
+	var opened []dbm.DB
+	defer func() {
+		if err != nil {
+			for _, db := range opened {
+				_ = db.Close()
+			}
+			blockStore, stateDB, sigStore = nil, nil, nil
+		}
+	}()
+
 	var blockStoreDB dbm.DB
 	blockStoreDB, err = dbProvider(&DBContext{"blockstore", config})
 	if err != nil {
 		return
 	}
+	opened = append(opened, blockStoreDB)
 	blockStore = store.NewBlockStore(blockStoreDB)
 
 	stateDB, err = dbProvider(&DBContext{"state", config})
 	if err != nil {
 		return
 	}
+	opened = append(opened, stateDB)
 
-	// TODO: add a new store, notify the-3rd parties to integrate
 	var sigDB dbm.DB
 	sigDB, err = dbProvider(&DBContext{"signatures", config})
 	if err != nil {
 		return
 	}
+	opened = append(opened, sigDB)
 	sigStore = sequencer.NewSignatureStore(sigDB)
 
 	return
