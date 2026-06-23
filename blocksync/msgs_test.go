@@ -1,7 +1,6 @@
 package blocksync_test
 
 import (
-	"bytes"
 	"encoding/hex"
 	"math"
 	"math/big"
@@ -13,10 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tendermint/tendermint/blocksync"
-	"github.com/tendermint/tendermint/crypto"
 	bcproto "github.com/tendermint/tendermint/proto/tendermint/blocksync"
 	"github.com/tendermint/tendermint/types"
-	"github.com/tendermint/tendermint/upgrade"
 )
 
 func TestBcBlockRequestMessageValidateBasic(t *testing.T) {
@@ -84,65 +81,24 @@ func TestBcStatusResponseMessageValidateBasic(t *testing.T) {
 	}
 }
 
-func TestValidateMsgBlockResponseRejectsV1AtUpgradeHeight(t *testing.T) {
-	oldHeight := upgrade.UpgradeBlockHeight
-	upgrade.SetUpgradeBlockHeight(10)
-	defer upgrade.SetUpgradeBlockHeight(oldHeight)
-
-	lastBlockID := types.BlockID{
-		Hash: bytes.Repeat([]byte{1}, 32),
-		PartSetHeader: types.PartSetHeader{
-			Total: 1,
-			Hash:  bytes.Repeat([]byte{2}, 32),
-		},
-	}
-	lastCommit := types.NewCommit(9, 0, lastBlockID, []types.CommitSig{{
-		BlockIDFlag:      types.BlockIDFlagCommit,
-		ValidatorAddress: bytes.Repeat([]byte{3}, crypto.AddressSize),
-		Signature:        []byte{1},
-	}})
-
-	block := types.MakeBlock(10, []types.Tx{types.Tx("Hello World")}, nil, nil, nil, lastCommit, nil)
-	block.ProposerAddress = bytes.Repeat([]byte{4}, crypto.AddressSize)
-	bpb, err := block.ToProto()
-	require.NoError(t, err)
-
-	err = blocksync.ValidateMsg(&bcproto.BlockResponse{Block: bpb})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unexpected BlockResponse")
-}
-
-func TestValidateMsgBlockResponseV2RejectsPreUpgradeHeight(t *testing.T) {
-	oldHeight := upgrade.UpgradeBlockHeight
-	upgrade.SetUpgradeBlockHeight(10)
-	defer upgrade.SetUpgradeBlockHeight(oldHeight)
-
+// ValidateMsg validates block responses structurally only. The old "reject V1/V2 by upgrade
+// height" checks were removed: the timestamp-driven boundary is unknown at message-validation
+// time, so the blocksync reactor guards the V1/V2 type at consume time instead. A structurally
+// valid block passes regardless of height; a malformed one is rejected.
+func TestValidateMsgBlockResponseV2Structural(t *testing.T) {
 	blockV2 := &types.BlockV2{
 		ParentHash: common.HexToHash("0x1"),
 		Hash:       common.HexToHash("0x2"),
-		BaseFee:    big.NewInt(1),
-		Number:     9,
-	}
-
-	err := blocksync.ValidateMsg(&bcproto.BlockResponseV2{Block: types.BlockV2ToProto(blockV2)})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unexpected BlockResponseV2")
-}
-
-func TestValidateMsgBlockResponseV2AllowsUpgradeHeight(t *testing.T) {
-	oldHeight := upgrade.UpgradeBlockHeight
-	upgrade.SetUpgradeBlockHeight(10)
-	defer upgrade.SetUpgradeBlockHeight(oldHeight)
-
-	blockV2 := &types.BlockV2{
-		ParentHash: common.HexToHash("0x1"),
-		Hash:       common.HexToHash("0x2"),
+		Signature:  make([]byte, 65),
 		BaseFee:    big.NewInt(1),
 		Number:     10,
 	}
+	require.NoError(t, blocksync.ValidateMsg(&bcproto.BlockResponseV2{Block: types.BlockV2ToProto(blockV2)}))
 
-	err := blocksync.ValidateMsg(&bcproto.BlockResponseV2{Block: types.BlockV2ToProto(blockV2)})
-	require.NoError(t, err)
+	// Malformed V2 (bad hash length) -> rejected by structural validation.
+	bad := types.BlockV2ToProto(blockV2)
+	bad.Hash = []byte{0x1, 0x2}
+	require.Error(t, blocksync.ValidateMsg(&bcproto.BlockResponseV2{Block: bad}))
 }
 
 //nolint:lll // ignore line length in tests
@@ -164,7 +120,7 @@ func TestBlockchainMessageVectors(t *testing.T) {
 			BlockRequest: &bcproto.BlockRequest{Height: math.MaxInt64}}},
 			"0a0a08ffffffffffffffff7f"},
 		{"BlockResponseMessage", &bcproto.Message{Sum: &bcproto.Message_BlockResponse{
-			BlockResponse: &bcproto.BlockResponse{Block: bpb}}}, "1a700a6e0a5b0a02080b1803220b088092b8c398feffffff012a0212003a20c4da88e876062aa1543400d50d0eaa0dac88096057949cfb7bca7f3a48c04bf96a20e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855120d0a0b48656c6c6f20576f726c641a00"},
+			BlockResponse: &bcproto.BlockResponse{Block: bpb}}}, "1a700a6e0a5b0a02080b1803220b088092b8c398feffffff012a021a003a20fb5fddfb1922fa75ac66398d8adeb962739e0259e7b3e811a81449683a3b78cd6a20e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855120d0a0b48656c6c6f20576f726c641a00"},
 		{"NoBlockResponseMessage", &bcproto.Message{Sum: &bcproto.Message_NoBlockResponse{
 			NoBlockResponse: &bcproto.NoBlockResponse{Height: 1}}}, "12020801"},
 		{"NoBlockResponseMessage", &bcproto.Message{Sum: &bcproto.Message_NoBlockResponse{

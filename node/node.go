@@ -111,8 +111,10 @@ func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
 		DefaultDBProvider,
 		DefaultMetricsProvider(config.Instrumentation),
 		logger,
-		nil,
-		nil,
+		nil, // sequencerVerifier
+		nil, // l1Tracker
+		nil, // sequencerSigner
+		nil, // ha: no HA in default node
 	)
 }
 
@@ -140,6 +142,8 @@ type Option func(*Node)
 // See: https://github.com/tendermint/tendermint/issues/4595
 type blockSyncReactor interface {
 	SwitchToBlockSync(sm.State) error
+	StopForReorg() error
+	SwitchToBlockSyncFromReorg(int64) error
 }
 
 // CustomReactors allows you to add custom reactors (name -> p2p.Reactor) to
@@ -237,20 +241,42 @@ type Node struct {
 	// Sequencer mode (after upgrade)
 	stateV2               *sequencer.StateV2
 	blockBroadcastReactor *sequencer.BlockBroadcastReactor
+	sigStore              *sequencer.SignatureStore
+	ha                    sequencer.SequencerHA
 }
 
-func initDBs(config *cfg.Config, dbProvider DBProvider) (blockStore *store.BlockStore, stateDB dbm.DB, err error) {
+func initDBs(config *cfg.Config, dbProvider DBProvider) (blockStore *store.BlockStore, stateDB dbm.DB, sigStore *sequencer.SignatureStore, err error) {
+	var opened []dbm.DB
+	defer func() {
+		if err != nil {
+			for _, db := range opened {
+				_ = db.Close()
+			}
+			blockStore, stateDB, sigStore = nil, nil, nil
+		}
+	}()
+
 	var blockStoreDB dbm.DB
 	blockStoreDB, err = dbProvider(&DBContext{"blockstore", config})
 	if err != nil {
 		return
 	}
+	opened = append(opened, blockStoreDB)
 	blockStore = store.NewBlockStore(blockStoreDB)
 
 	stateDB, err = dbProvider(&DBContext{"state", config})
 	if err != nil {
 		return
 	}
+	opened = append(opened, stateDB)
+
+	var sigDB dbm.DB
+	sigDB, err = dbProvider(&DBContext{"signatures", config})
+	if err != nil {
+		return
+	}
+	opened = append(opened, sigDB)
+	sigStore = sequencer.NewSignatureStore(sigDB)
 
 	return
 }
@@ -488,30 +514,37 @@ func createConsensusReactor(
 func createSequencerComponents(
 	l2Node l2node.L2Node,
 	pool *bc.BlockPool,
-	waitSync bool,
 	logger log.Logger,
 	verifier sequencer.SequencerVerifier,
+	l1Tracker sequencer.L1Tracker,
 	signer sequencer.Signer,
+	sigStore *sequencer.SignatureStore,
+	ha sequencer.SequencerHA,
 ) (*sequencer.StateV2, *sequencer.BlockBroadcastReactor, error) {
 	// Create StateV2
 	stateV2, err := sequencer.NewStateV2(
 		l2Node,
-		sequencer.DefaultBlockInterval,
 		logger,
 		verifier,
+		l1Tracker,
 		signer,
+		sigStore,
+		ha,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create StateV2: %w", err)
 	}
 
-	// Create BlockBroadcastReactor (not started yet)
+	// Create BlockBroadcastReactor (not started yet).
+	// Routines are started later via StartSequencerRoutines() — see OnStart()
+	// doc comment for the full explanation.
 	broadcastReactor := sequencer.NewBlockBroadcastReactor(
 		pool,
 		stateV2,
-		waitSync,
 		logger,
 		verifier,
+		l1Tracker,
+		sigStore,
 	)
 	broadcastReactor.SetLogger(logger.With("module", "sequencer"))
 
@@ -766,12 +799,14 @@ func NewNode(
 	metricsProvider MetricsProvider,
 	logger log.Logger,
 	sequencerVerifier sequencer.SequencerVerifier,
+	l1Tracker sequencer.L1Tracker,
 	sequencerSigner sequencer.Signer,
+	ha sequencer.SequencerHA,
 	options ...Option,
 ) (
 	*Node, error,
 ) {
-	blockStore, stateDB, err := initDBs(config, dbProvider)
+	blockStore, stateDB, sigStore, err := initDBs(config, dbProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -780,6 +815,14 @@ func NewNode(
 		stateDB,
 		sm.StoreOptions{DiscardABCIResponses: config.Storage.DiscardABCIResponses},
 	)
+
+	// Restore the persisted sequencer-upgrade boundary (if any) and wire the store so future
+	// SetUpgradeBlockHeight calls (finalizeCommit / blocksync) persist it automatically.
+	// A DB read failure here is fatal: booting with a reset boundary would let the node
+	// re-run PBFT past the upgrade.
+	if err := upgrade.SetStore(stateDB); err != nil {
+		return nil, err
+	}
 
 	state, genDoc, err := LoadStateFromDBOrGenesisDocProvider(stateDB, genesisDocProvider)
 	if err != nil {
@@ -982,6 +1025,8 @@ func NewNode(
 		indexerService:   indexerService,
 		blockIndexer:     blockIndexer,
 		eventBus:         eventBus,
+		sigStore:         sigStore,
+		ha:               ha,
 	}
 	node.BaseService = *service.NewBaseService(logger, "Node", node)
 
@@ -993,16 +1038,25 @@ func NewNode(
 		if node.stateV2, node.blockBroadcastReactor, err = createSequencerComponents(
 			l2NodeRef,
 			bcR.Pool(),
-			blockSync || stateSync,
 			logger,
 			sequencerVerifier,
+			l1Tracker,
 			sequencerSigner,
+			sigStore,
+			ha, // HA service injected from NewNode caller; nil disables HA mode
 		); err != nil {
 			return nil, err
 		}
 
-		// Set stateV2 on blocksync reactor for post-upgrade sync
+		// Wire HA FSM callback: ApplyBlock handles geth apply + SaveSignature.
+		if ha != nil {
+			ha.SetOnBlockApplied(node.stateV2.ApplyBlock)
+		}
+
+		// Set stateV2&verifier&sigStore on blocksync reactor for post-upgrade
 		bcR.SetStateV2(node.stateV2)
+		bcR.SetVerifier(sequencerVerifier)
+		bcR.SetSigStore(sigStore)
 
 		// Register BlockBroadcastReactor with Switch
 		sw.AddReactor("SEQUENCER", node.blockBroadcastReactor)
@@ -1142,6 +1196,11 @@ func (n *Node) OnStop() {
 	if n.stateStore != nil {
 		if err := n.stateStore.Close(); err != nil {
 			n.Logger.Error("problem closing statestore", "err", err)
+		}
+	}
+	if n.sigStore != nil {
+		if err := n.sigStore.Close(); err != nil {
+			n.Logger.Error("problem closing sigstore", "err", err)
 		}
 	}
 }
@@ -1593,20 +1652,101 @@ func (n *Node) startSequencerMode() {
 func (n *Node) switchToSequencerMode() {
 	n.Logger.Info("Upgrade callback triggered, scheduling switch to sequencer mode")
 
-	// NOTE: Must use goroutine to avoid deadlock - onUpgrade is called from finalizeCommit,
-	// and consensusReactor.Stop() would try to stop the state that's currently running.
+	// Run in a goroutine: this callback executes inside finalizeCommit which
+	// runs on receiveRoutine. We must let receiveRoutine return before it can
+	// observe cs.Quit() and close cs.done. Calling consensusReactor.Stop()
+	// synchronously here would block on conS.Wait() — which waits for the very
+	// goroutine we are running on — and deadlock.
 	go func() {
-		// Wait a moment for finalizeCommit to complete
-		time.Sleep(100 * time.Millisecond)
+		// Wait until receiveRoutine has fully exited.
+		//
+		// cs.Stop() has already been called by finalizeCommit before invoking
+		// this callback (see consensus/state.go upgrade branch), so cs.Quit()
+		// is closed and receiveRoutine will hit the case <-cs.Quit() branch as
+		// soon as finalizeCommit returns. cs.done is closed at the very end of
+		// receiveRoutine. Waiting on it replaces the previous 100ms sleep with
+		// a deterministic synchronization point.
+		n.Logger.Info("Waiting for consensus state to drain...")
+		n.consensusState.Wait()
+		n.Logger.Info("Consensus state drained")
 
-		// Stop consensus reactor
-		n.Logger.Info("Stopping consensus reactor...")
+		// Belt-and-suspenders: ensure last PBFT votes / NewRoundStepMessage have
+		// time to flush to peers before we tear down the reactor's gossip routines.
+		// This compensates for tightened PBFT timeouts (timeout_precommit / commit).
+		time.Sleep(1 * time.Second)
+
+		// Stop consensus reactor through the standard BaseService.Stop path so
+		// its stopped flag is set; this prevents the P2P switch from invoking
+		// OnStop a second time during node shutdown. OnStop will call
+		// conS.Stop() (idempotent: returns ErrAlreadyStopped, logged only) and
+		// conS.Wait() (already satisfied since cs.done is closed).
+		n.Logger.Info("Stopping consensus reactor for upgrade...")
 		if err := n.consensusReactor.Stop(); err != nil {
 			n.Logger.Error("Failed to stop consensus reactor", "err", err)
 		}
 		n.Logger.Info("Consensus reactor stopped")
 
-		// Start broadcast reactor
+		// Start broadcast reactor for sequencer mode.
 		n.startSequencerMode()
 	}()
+}
+
+// StopReactorsBeforeReorg stops the broadcast reactor and the blocksync reactor
+// in preparation for a derivation-driven reorg. After this returns, no goroutine
+// from either reactor is running and no new BlockResponseV2 / BlockRequest will
+// be processed. HA-enabled nodes (sequencers) are skipped — sequencers do not
+// participate in automatic reorg per docs/reorg/reorg兼容问题与优化.md.
+//
+// Order: broadcast first (stop applying new blocks via P2P), then blocksync
+// (stop sync requests). Each Stop is gated on IsRunning so this is idempotent
+// and safe to call when a reactor is already stopped or was never started.
+func (n *Node) StopReactorsBeforeReorg() error {
+	if n.ha != nil {
+		return nil
+	}
+
+	if err := n.blockBroadcastReactor.StopForReorg(); err != nil {
+		return err
+	}
+
+	bcR, ok := n.bcReactor.(blockSyncReactor)
+	if !ok {
+		return fmt.Errorf("this blockchain reactor does not support stopping for reorg")
+	}
+	if err := bcR.StopForReorg(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// StartReactorsAfterReorg restarts the blocksync and broadcast reactors after
+// a reorg, with the post-reorg head height as currentHeight. The blocksync
+// reactor rebuilds its BlockPool from currentHeight+1 and is responsible for
+// catching up the local node back to the network tip. Once caught up its
+// switchToConsensus tick re-invokes StartSequencerRoutines on the broadcast
+// reactor, which is brought back to a clean state by the Reset+Start below.
+//
+// Reset on a still-running reactor would fail with "can't reset running ..."
+// — Stop must precede it (handled by StopReactorsBeforeReorg). The IsRunning
+// check below makes this method idempotent in the rare case of partial state
+// (e.g., previous Stop returned an error).
+func (n *Node) StartReactorsAfterReorg(currentHeight int64) error {
+	if n.ha != nil {
+		return nil
+	}
+
+	bcR, ok := n.bcReactor.(blockSyncReactor)
+	if !ok {
+		return fmt.Errorf("this blockchain reactor does not support reorg restart")
+	}
+
+	// Reset() requires the reactor to be in stopped state. It can legitimately
+	// fail when the reactor was never started yet (e.g. very early init paths)
+	// or when StopReactorsBeforeReorg silently skipped Stop because the reactor
+	// wasn't running. Log and continue rather than abort the reorg flow —
+	// surfacing the error gives observability without blocking recovery.
+	if err := n.blockBroadcastReactor.Reset(); err != nil {
+		n.Logger.Error("reset broadcast reactor failed; continuing", "err", err)
+	}
+	return bcR.SwitchToBlockSyncFromReorg(currentHeight)
 }

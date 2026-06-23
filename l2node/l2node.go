@@ -57,8 +57,9 @@ type L2Node interface {
 	RequestBlockDataV2(parentHash []byte) (block *BlockV2, collectedL1Msgs bool, err error)
 
 	// ApplyBlockV2 applies a BlockV2 to the L2 execution layer.
-	// Uses Engine API (NewL2Block) internally.
-	ApplyBlockV2(block *BlockV2) error
+	// Returns (applied, err): applied=true if geth state changed,
+	// applied=false if idempotent skip (block already on-chain with same hash).
+	ApplyBlockV2(block *BlockV2) (applied bool, err error)
 
 	// GetBlockByNumber retrieves a BlockV2 by its number.
 	// Can be implemented using geth's eth_getBlockByNumber JSON-RPC.

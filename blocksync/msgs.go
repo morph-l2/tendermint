@@ -8,7 +8,6 @@ import (
 
 	bcproto "github.com/tendermint/tendermint/proto/tendermint/blocksync"
 	"github.com/tendermint/tendermint/types"
-	"github.com/tendermint/tendermint/upgrade"
 )
 
 const (
@@ -88,22 +87,12 @@ func ValidateMsg(pb proto.Message) error {
 			return errors.New("negative Height")
 		}
 	case *bcproto.BlockResponse:
-		// V1 block format
-		block, err := types.BlockFromProto(msg.Block)
-		if err != nil {
+		if _, err := types.BlockFromProto(msg.Block); err != nil {
 			return err
-		}
-		if upgrade.IsUpgraded(block.Height) {
-			return fmt.Errorf("unexpected BlockResponse at upgraded height %d", block.Height)
 		}
 	case *bcproto.BlockResponseV2:
-		// V2 block format (sequencer mode)
-		block, err := types.BlockV2FromProto(msg.Block)
-		if err != nil {
+		if _, err := types.BlockV2FromProto(msg.Block); err != nil {
 			return err
-		}
-		if !upgrade.IsUpgraded(block.GetHeight()) {
-			return fmt.Errorf("unexpected BlockResponseV2 before upgraded height %d", block.GetHeight())
 		}
 	case *bcproto.NoBlockResponse:
 		if msg.Height < 0 {

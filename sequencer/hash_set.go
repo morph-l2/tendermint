@@ -6,7 +6,8 @@ import (
 	"github.com/morph-l2/go-ethereum/common"
 )
 
-// HashSet is a fixed-capacity set for common.Hash with LRU eviction.
+// HashSet is a fixed-capacity set for common.Hash with FIFO eviction
+// (insertion-order ring buffer; entries are not re-ordered on access).
 type HashSet struct {
 	items    []common.Hash
 	index    map[common.Hash]int
@@ -57,6 +58,16 @@ func (s *HashSet) Contains(hash common.Hash) bool {
 	defer s.mtx.RUnlock()
 	_, exists := s.index[hash]
 	return exists
+}
+
+// Clear drops every entry. The backing items slice is reused; subsequent
+// Add() calls overwrite it. Used during reactor reset.
+func (s *HashSet) Clear() {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	s.index = make(map[common.Hash]int, s.capacity)
+	s.head = 0
+	s.count = 0
 }
 
 // PeerHashSet is a per-peer hash set.
@@ -114,4 +125,11 @@ func (s *PeerHashSet) RemovePeer(peerID string) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 	delete(s.peers, peerID)
+}
+
+// Clear drops all per-peer hash sets. Used during reactor reset.
+func (s *PeerHashSet) Clear() {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	s.peers = make(map[string]*HashSet)
 }

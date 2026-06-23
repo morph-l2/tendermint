@@ -1,7 +1,6 @@
 package sequencer
 
 import (
-	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -12,61 +11,73 @@ import (
 )
 
 const (
-	// DefaultBlockInterval is the default interval between blocks
-	// TODO: make this configurable
-	DefaultBlockInterval = 3000 * time.Millisecond
+	// BlockInterval is the fallback interval for empty blocks (no txs).
+	BlockInterval = 5000 * time.Millisecond
+	// FastBlockInterval is the txpool polling interval.
+	// When pending txs are found, a block is produced immediately.
+	FastBlockInterval = 300 * time.Millisecond
 )
 
 // StateV2 manages the state for centralized sequencer mode.
 // It replaces the PBFT consensus state after the upgrade.
+//
+// Node roles:
+//   - Fullnode (signer==nil): only applyRoutine runs (in reactor), no block production
+//   - ActiveSequencer (signer!=nil, ha==nil): roleCheckRoutine + broadcastRoutine
+//   - HA-Leader (signer!=nil, ha!=nil, ha.IsLeader()==true): roleCheckRoutine + broadcastRoutine
+//   - HA-Follower (signer!=nil, ha!=nil, ha.IsLeader()==false): roleCheckRoutine (idle)
 type StateV2 struct {
 	service.BaseService
 
 	mtx sync.RWMutex
 
 	// Core state
-	latestBlock   *BlockV2
-	sequencerMode bool // Whether the node is started in sequencer mode (has signer configured)
+	latestBlock *BlockV2
 
 	// Dependencies
-	l2Node   l2node.L2Node
-	signer   Signer
-	verifier SequencerVerifier
-	logger   log.Logger
+	l2Node    l2node.L2Node
+	signer    Signer
+	verifier  SequencerVerifier
+	l1Tracker L1Tracker // required: gates block production on L1 freshness
+	sigStore  *SignatureStore
+	ha        SequencerHA // nil = single-node mode
+	logger    log.Logger
 
 	// Block production
-	blockTicker   *time.Ticker
-	blockInterval time.Duration
+	blockInterval     time.Duration // empty-block fallback interval (default 3s)
+	fastBlockInterval time.Duration // txpool polling interval (default 300ms)
 
-	// Broadcast channel - blocks produced by this sequencer are sent here
+	// Broadcast channel - non-HA self-produced blocks are sent here
 	broadcastCh chan *BlockV2
-
-	// Quit channel
-	quitCh chan struct{}
 }
 
 // NewStateV2 creates a new StateV2 instance.
-// sequencerMode is determined by whether a signer is provided.
+// Node mode is determined by whether a signer and/or ha is provided.
+// verifier is required when signer is configured (sequencer/HA nodes must verify blocks).
 func NewStateV2(
 	l2Node l2node.L2Node,
-	blockInterval time.Duration,
 	logger log.Logger,
 	verifier SequencerVerifier,
+	l1Tracker L1Tracker,
 	signer Signer,
+	sigStore *SignatureStore,
+	ha SequencerHA,
 ) (*StateV2, error) {
-	if blockInterval <= 0 {
-		blockInterval = DefaultBlockInterval
+	if verifier == nil {
+		return nil, fmt.Errorf("sequencer verifier is required for V2 mode")
 	}
 
 	s := &StateV2{
-		l2Node:        l2Node,
-		signer:        signer,
-		verifier:      verifier,
-		sequencerMode: signer != nil,
-		blockInterval: blockInterval,
-		logger:        logger.With("module", "stateV2"),
-		broadcastCh:   make(chan *BlockV2, 100),
-		quitCh:        make(chan struct{}),
+		l2Node:            l2Node,
+		signer:            signer,
+		verifier:          verifier,
+		l1Tracker:         l1Tracker,
+		sigStore:          sigStore,
+		ha:                ha,
+		blockInterval:     BlockInterval,
+		fastBlockInterval: FastBlockInterval,
+		logger:            logger.With("module", "stateV2"),
+		broadcastCh:       make(chan *BlockV2, 100),
 	}
 
 	s.BaseService = *service.NewBaseService(logger, "StateV2", s)
@@ -75,9 +86,8 @@ func NewStateV2(
 }
 
 // OnStart implements service.Service.
-// It initializes state from geth and starts block production if this node is the active sequencer.
+// Initializes state from geth. Nodes with a signer start roleCheckRoutine.
 func (s *StateV2) OnStart() error {
-	// Initialize latest block from geth
 	latestBlock, err := s.l2Node.GetLatestBlockV2()
 	if err != nil {
 		return fmt.Errorf("failed to get latest block: %w", err)
@@ -87,28 +97,25 @@ func (s *StateV2) OnStart() error {
 	s.latestBlock = latestBlock
 	s.mtx.Unlock()
 
-	var seqAddr string
-	var isActiveSequencer bool
-	if s.signer != nil {
-		seqAddr = s.signer.Address().Hex()
-		// Check if this node is the active sequencer via L1 contract
-		isActiveSequencer, err = s.signer.IsActiveSequencer(context.Background())
-		if err != nil {
-			s.logger.Error("Failed to check sequencer status", "error", err)
-			isActiveSequencer = false
+	// Use local variable to avoid accessing s.latestBlock without lock in log statement.
+	s.logger.Info("StateV2 initialized",
+		"latestHeight", latestBlock.Number,
+		"latestHash", latestBlock.Hash.Hex(),
+		"hasSigner", s.signer != nil,
+		"isHAMode", s.ha != nil)
+
+	// Start HA service at upgrade height. This initializes Raft and begins
+	// leader election (bootstrap) or cluster join (follower).
+	if s.ha != nil {
+		if err := s.ha.Start(); err != nil {
+			return fmt.Errorf("failed to start HA service: %w", err)
 		}
 	}
 
-	s.logger.Info("StateV2 initialized",
-		"latestHeight", s.latestBlock.Number,
-		"latestHash", s.latestBlock.Hash.Hex(),
-		"sequencerMode", s.sequencerMode,
-		"isActiveSequencer", isActiveSequencer,
-		"seqAddr", seqAddr)
-
-	// Start block production if sequencer mode is enabled and this node is the active sequencer
-	if s.sequencerMode && isActiveSequencer {
-		go s.produceBlockRoutine()
+	// Fullnode (no signer) does not produce blocks; applyRoutine is managed by the reactor.
+	// Nodes with signer start roleCheckRoutine, which handles dynamic role detection.
+	if s.signer != nil {
+		go s.roleCheckRoutine()
 	}
 
 	return nil
@@ -117,72 +124,188 @@ func (s *StateV2) OnStart() error {
 // OnStop implements service.Service.
 func (s *StateV2) OnStop() {
 	s.logger.Info("Stopping StateV2")
-	close(s.quitCh)
-	if s.blockTicker != nil {
-		s.blockTicker.Stop()
+	if s.ha != nil {
+		s.ha.Stop()
 	}
 }
 
-// produceBlockRoutine is the main loop for block production.
-func (s *StateV2) produceBlockRoutine() {
-	s.blockTicker = time.NewTicker(s.blockInterval)
-	defer s.blockTicker.Stop()
+func (s *StateV2) OnReset() error {
+	return nil
+}
 
-	s.logger.Info("Starting block production routine", "interval", s.blockInterval)
+// roleCheckRoutine is the unified loop for role detection and block production.
+// It runs for all nodes with a signer (ActiveSequencer, HA-Leader, HA-Follower).
+//
+// Two timers drive block production:
+//   - fastTicker (300ms): polls txpool via assembleBlock; produces immediately when txs found.
+//   - slowTimer (3s): forces a block (even empty) to maintain chain liveness.
+//
+// When fastTicker produces a block, slowTimer is reset to avoid redundant empty blocks.
+func (s *StateV2) roleCheckRoutine() {
+	fastTicker := time.NewTicker(s.fastBlockInterval)
+	slowTimer := time.NewTimer(s.blockInterval)
+	defer fastTicker.Stop()
+	defer slowTimer.Stop()
+
+	s.logger.Info("Starting role check routine",
+		"pollInterval", s.fastBlockInterval,
+		"emptyBlockInterval", s.blockInterval)
 
 	for {
 		select {
-		case <-s.quitCh:
-			s.logger.Info("Block production routine stopped")
+		case <-s.Quit():
+			s.logger.Info("Role check routine stopped")
 			return
-		case <-s.blockTicker.C:
-			s.produceBlock()
+
+		case <-fastTicker.C:
+			if !s.isActiveSequencer() {
+				continue
+			}
+			block, collectedL1Msgs, err := s.assembleBlock()
+			if err != nil {
+				continue
+			}
+			if len(block.Transactions) == 0 && !collectedL1Msgs {
+				continue // empty block, discard and wait for next tick
+			}
+			s.commitBlock(block, collectedL1Msgs)
+			resetTimer(slowTimer, s.blockInterval)
+
+		case <-slowTimer.C:
+			if s.isActiveSequencer() {
+				block, collectedL1Msgs, err := s.assembleBlock()
+				if err == nil {
+					s.commitBlock(block, collectedL1Msgs)
+				}
+			}
+			slowTimer.Reset(s.blockInterval)
 		}
 	}
 }
 
-// produceBlock produces a new block and broadcasts it.
-func (s *StateV2) produceBlock() {
-	s.mtx.Lock()
+// resetTimer safely stops, drains, and resets a timer.
+// t.Stop() returns false when the timer has already fired but t.C has not been
+// consumed; the non-blocking drain prevents a stale fire from triggering the
+// next select iteration.
+func resetTimer(t *time.Timer, d time.Duration) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+	t.Reset(d)
+}
+
+// isActiveSequencer returns true if this node should produce the next block.
+// For HA mode: must be Raft leader AND L1-designated sequencer.
+// For single-node mode: must be L1-designated sequencer.
+func (s *StateV2) isActiveSequencer() bool {
+	// HA mode: must be Raft leader
+	if s.ha != nil && !s.ha.IsLeader() {
+		return false
+	}
+
+	// L1 tracker: stop producing if L1 RPC is stale (we may be blind to
+	// SequencerUpdated events on L1 and could produce as a revoked sequencer).
+	if s.l1Tracker.IsHalt() {
+		return false
+	}
+
+	s.mtx.RLock()
+	lb := s.latestBlock
+	s.mtx.RUnlock()
+	if lb == nil {
+		return false
+	}
+	nextHeight := lb.Number + 1
+
+	ok, err := s.verifier.IsSequencerAt(s.signer.Address(), nextHeight)
+	if err != nil {
+		s.logger.Error("Failed to check sequencer status", "height", nextHeight, "err", err)
+		return false
+	}
+	return ok
+}
+
+// assembleBlock calls geth Engine API to build a candidate block from the current
+// txpool and pending L1 messages. This is a read-only operation with no side
+// effects — the result can be safely discarded if the block has no work.
+func (s *StateV2) assembleBlock() (*BlockV2, bool, error) {
+	s.mtx.RLock()
 	parentHash := s.latestBlock.Hash
-	s.mtx.Unlock()
+	s.mtx.RUnlock()
 
-	s.logger.Debug("Producing block", "parentHash", parentHash.Hex())
-
-	// Request block data from geth (pass hash as bytes)
 	block, collectedL1Msgs, err := s.l2Node.RequestBlockDataV2(parentHash.Bytes())
 	if err != nil {
-		s.logger.Error("Failed to request block data", "error", err)
-		return
+		s.logger.Error("Failed to assemble block", "error", err)
+		return nil, false, err
 	}
-	_ = collectedL1Msgs // TODO: log or use this info
+	return block, collectedL1Msgs, nil
+}
 
-	// Sign the block
+// commitBlock signs the assembled block and either commits via Raft (HA mode)
+// or applies locally and sends to broadcastCh (single-node mode).
+func (s *StateV2) commitBlock(block *BlockV2, collectedL1Msgs bool) {
+	t0 := time.Now()
+
+	tSign := time.Now()
 	if err := s.signBlock(block); err != nil {
 		s.logger.Error("Failed to sign block", "error", err)
 		return
 	}
+	signDur := time.Since(tSign)
 
-	// ********************* RAFT HA *********************
-	// TODO: add raft HA
-	// ****************************************************
+	if s.ha != nil {
+		// HA mode: replicate via Raft. FSM callback handles ApplyBlock + SaveSignature
+		// for both leader and follower. Broadcast via ha.Subscribe() -> broadcastRoutine.
+		tCommit := time.Now()
+		if err := s.ha.Commit(block); err != nil {
+			s.logger.Error("Failed to commit block via HA", "number", block.Number, "err", err)
+			return
+		}
+		commitDur := time.Since(tCommit)
+		totalDur := time.Since(t0)
 
-	// Apply the block to geth and update local state
-	if err := s.ApplyBlock(block); err != nil {
-		s.logger.Error("Failed to apply block", "error", err)
-		return
-	}
-
-	// Send to broadcast channel
-	select {
-	case s.broadcastCh <- block:
-		s.logger.Debug("Block produced and queued for broadcast",
-			"number", block.Number,
-			"hash", block.Hash.Hex(),
+		s.logger.Debug("[PERF] commitBlock",
+			"mode", "HA",
+			"height", block.Number,
 			"txCount", len(block.Transactions),
-			"collectedL1Msgs", collectedL1Msgs)
-	default:
-		s.logger.Error("Broadcast channel full, dropping block", "number", block.Number)
+			"gasUsed", block.GasUsed,
+			"sign_ms", float64(signDur.Microseconds())/1000.0,
+			"raft_commit_ms", float64(commitDur.Microseconds())/1000.0,
+			"total_ms", float64(totalDur.Microseconds())/1000.0,
+		)
+	} else {
+		// Non-HA mode: apply locally (includes SaveSignature), broadcast via broadcastCh.
+		tApply := time.Now()
+		if err := s.ApplyBlock(block); err != nil {
+			s.logger.Error("Failed to apply block", "error", err)
+			return
+		}
+		applyDur := time.Since(tApply)
+		totalDur := time.Since(t0)
+
+		s.logger.Debug("[PERF] commitBlock",
+			"mode", "single",
+			"height", block.Number,
+			"txCount", len(block.Transactions),
+			"gasUsed", block.GasUsed,
+			"sign_ms", float64(signDur.Microseconds())/1000.0,
+			"apply_ms", float64(applyDur.Microseconds())/1000.0,
+			"total_ms", float64(totalDur.Microseconds())/1000.0,
+		)
+
+		select {
+		case s.broadcastCh <- block:
+			s.logger.Debug("Block queued for broadcast",
+				"number", block.Number,
+				"hash", block.Hash.Hex(),
+				"txCount", len(block.Transactions),
+				"collectedL1Msgs", collectedL1Msgs)
+		default:
+			s.logger.Error("Broadcast channel full, dropping block", "number", block.Number)
+		}
 	}
 }
 
@@ -191,16 +314,56 @@ func (s *StateV2) signBlock(block *BlockV2) error {
 	if s.signer == nil {
 		return fmt.Errorf("signer not set")
 	}
-
-	// Sign the block hash
 	signature, err := s.signer.Sign(block.Hash.Bytes())
 	if err != nil {
 		return fmt.Errorf("failed to sign block: %w", err)
 	}
-
 	block.Signature = signature
-
 	s.logger.Debug("Block signed", "number", block.Number, "hash", block.Hash.Hex(), "signer", s.signer.Address().Hex())
+	return nil
+}
+
+// ApplyBlock saves the block signature and delegates to l2Node.ApplyBlockV2.
+// Reorg detection and idempotent checks are handled in the Executor layer.
+func (s *StateV2) ApplyBlock(block *BlockV2) error {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+
+	if len(block.Signature) == 0 {
+		return fmt.Errorf("ApplyBlock: block %d missing signature", block.Number)
+	}
+
+	// Save signature BEFORE applying to geth. If crash happens after Apply
+	// but before SaveSignature, the block is on-chain but its signature is
+	// lost — which can cause P2P peers to reject/disconnect when they cannot
+	// verify the block. Saving first at worst leaves an orphan signature if
+	// Apply fails, which is harmless.
+	tSig := time.Now()
+	if err := s.sigStore.SaveSignature(block.Hash, block.Signature); err != nil {
+		return err
+	}
+	sigDur := time.Since(tSig)
+
+	tGeth := time.Now()
+	applied, err := s.l2Node.ApplyBlockV2(block)
+	if err != nil {
+		return err
+	}
+	gethDur := time.Since(tGeth)
+
+	if applied {
+		s.latestBlock = block
+	}
+
+	s.logger.Debug("[PERF] ApplyBlock",
+		"height", block.Number,
+		"txCount", len(block.Transactions),
+		"gasUsed", block.GasUsed,
+		"sigSave_ms", float64(sigDur.Microseconds())/1000.0,
+		"geth_ms", float64(gethDur.Microseconds())/1000.0,
+		"total_ms", float64((gethDur+sigDur).Microseconds())/1000.0,
+	)
+
 	return nil
 }
 
@@ -221,36 +384,38 @@ func (s *StateV2) LatestBlock() *BlockV2 {
 	return s.latestBlock
 }
 
-// BroadcastCh returns the channel for blocks to be broadcast.
-// No lock needed - channel itself is thread-safe.
+// BroadcastCh returns the channel for self-produced blocks (non-HA mode only).
 func (s *StateV2) BroadcastCh() <-chan *BlockV2 {
 	return s.broadcastCh
 }
 
-// ApplyBlock applies a block to L2 and updates local state.
-// This is the unified entry point for block application.
-func (s *StateV2) ApplyBlock(block *BlockV2) error {
-	// Apply to L2 execution layer
-	if err := s.l2Node.ApplyBlockV2(block); err != nil {
-		return err
-	}
-
-	// Update local state
-	s.mtx.Lock()
-	s.latestBlock = block
-	s.mtx.Unlock()
-
-	return nil
-}
-
 // GetBlockByNumber gets a block from l2node by number.
-// Uses geth's eth_getBlockByNumber RPC internally.
 func (s *StateV2) GetBlockByNumber(number uint64) (*BlockV2, error) {
 	return s.l2Node.GetBlockByNumber(number)
 }
 
-// IsSequencerMode returns whether this node is started in sequencer mode.
-// This means the node has a signer configured and can potentially produce blocks.
-func (s *StateV2) IsSequencerMode() bool {
-	return s.sequencerMode
+// HasSigner returns whether this node has a signer configured.
+// Fullnode returns false; ActiveSequencer and HA nodes return true.
+func (s *StateV2) HasSigner() bool {
+	return s.signer != nil
+}
+
+// IsHAMode returns whether this node is in HA mode (ha != nil).
+func (s *StateV2) IsHAMode() bool {
+	return s.ha != nil
+}
+
+// IsHALeader returns whether this node is the current Raft leader.
+// Returns false if not in HA mode.
+func (s *StateV2) IsHALeader() bool {
+	return s.ha != nil && s.ha.IsLeader()
+}
+
+// HASubscribe returns the HA block delivery channel.
+// Panics if not in HA mode.
+func (s *StateV2) HASubscribe() <-chan *BlockV2 {
+	if s.ha == nil {
+		panic("HASubscribe called but not in HA mode")
+	}
+	return s.ha.Subscribe()
 }

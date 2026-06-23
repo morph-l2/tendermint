@@ -1,23 +1,20 @@
 package sequencer
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"math/big"
 	"math/rand"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cosmos/gogoproto/proto"
 	"github.com/morph-l2/go-ethereum/common"
-	"github.com/morph-l2/go-ethereum/crypto"
 
 	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/p2p"
 	bcproto "github.com/tendermint/tendermint/proto/tendermint/blocksync"
-	seqproto "github.com/tendermint/tendermint/proto/tendermint/sequencer"
 	"github.com/tendermint/tendermint/types"
 )
 
@@ -25,14 +22,42 @@ const (
 	BlockBroadcastChannel = byte(0x50) // For block broadcast (requires signature verification)
 	SequencerSyncChannel  = byte(0x51) // For block sync requests (no signature verification)
 
-	// TODO: make these parameters configurable
-	smallGapThreshold    = 20   // Gap for direct block request
+	smallGapThreshold    = 10   // Gap for direct block request
 	recentBlocksCapacity = 1000 // Recent applied blocks cache
 	seenBlocksCapacity   = 2000 // Seen blocks for dedup
-	peerSentCapacity     = 500  // Per-peer sent tracking
-	applyInterval        = 10 * time.Second
-	syncInterval         = 10 * time.Second
+	peerGossipedCapacity = 500  // Per-peer gossiped tracking
+	applyInterval        = 3 * time.Second
+	syncInterval         = 5 * time.Second
+
+	// Sync request tracking
+	syncRequestTTL         = 20 * time.Second
+	maxPendingSyncRequests = 500
+	maxPendingSyncPerPeer  = 200
+
+	// Peer ban
+	peerBanDuration = 10 * time.Minute
+
+	// BlockRequest per-peer rate limit (token bucket).
+	//
+	// requestMissingBlocks sends a burst of up to maxPendingSyncPerPeer=200
+	// requests to the same peer within a single syncInterval tick — it is NOT
+	// a paced 40 qps stream. The bucket must therefore absorb that full burst,
+	// otherwise a catching-up fullnode with a single viable upstream would
+	// trip the limiter and get banned by removeTimeoutPeers 20s later.
+	//
+	// burst=250 covers the 200-request peak with headroom; rate=50 refills the
+	// bucket in 5s, which is exactly one syncInterval — so by the next tick
+	// the bucket is full again and can absorb another burst of the same size.
+	blockRequestRateLimit = 50.0 // tokens/sec (bucket fully refills every 5s)
+	blockRequestBurst     = 250  // bucket capacity (>= maxPendingSyncPerPeer)
 )
+
+// SyncReq represents a pending sync channel request.
+type SyncReq struct {
+	Height   int64
+	PeerID   p2p.ID
+	ExpireAt time.Time
+}
 
 // BlockPool interface (avoids import cycle)
 type BlockPool interface {
@@ -45,42 +70,87 @@ type BlockPool interface {
 type BlockBroadcastReactor struct {
 	p2p.BaseReactor
 
-	stateV2  *StateV2
-	pool     BlockPool
-	waitSync bool
+	stateV2 *StateV2
+
+	// poolMu guards pool. The blocksync reactor rebuilds its BlockPool on reorg
+	// (see blocksync.Reactor.SwitchToBlockSyncFromReorg) and pushes the new
+	// instance through SetPool, while peer-height lookups here run concurrently
+	// from message handlers.
+	poolMu sync.RWMutex
+	pool   BlockPool
 
 	recentBlocks *BlockRingBuffer   // Applied blocks for peer requests
 	pendingCache *PendingBlockCache // Pending blocks
 
 	// Gossip state (bounded capacity, auto-evict old entries)
-	seenBlocks *HashSet     // Blocks we've seen (dedup)
-	peerSent   *PeerHashSet // Blocks sent to each peer
+	seenBlocks   *HashSet     // Blocks we've seen (dedup)
+	peerGossiped *PeerHashSet // Blocks gossiped to / from each peer (for gossip dedup)
 
-	applyMtx         sync.Mutex // Protects applyBlock to ensure sequential block application
-	sequencerStarted bool       // True when sequencer mode is actually running (not just registered)
-	logger           log.Logger
+	// applyMtx serializes the "check parent + apply + save signature" sequence
+	// in the reactor's applyBlock path. StateV2.ApplyBlock has its own mutex
+	// for the actual apply, but applyMtx ensures the parent-hash check and
+	// signature persistence are also atomic with the apply.
+	applyMtx sync.Mutex
+	startMu  sync.Mutex
+	// routinesStarted is true once StartSequencerRoutines() has successfully
+	// run — i.e. the node has caught up and reached the upgrade height.
+	// Also used as a fast gate in Receive() to drop P2P messages that arrive
+	// before the reactor is ready (e.g. while blocksync is still running).
+	routinesStarted atomic.Bool
+	logger          log.Logger
 
-	verifier SequencerVerifier
+	verifier  SequencerVerifier
+	l1Tracker L1Tracker // required: gates peer-block sync on L1 freshness
+	sigStore  *SignatureStore
+
+	// syncRequests tracks pending sync channel requests, keyed by height.
+	// Used to reject unsolicited responses before decode/verification.
+	// syncPeerCounts is a secondary index for O(1) per-peer count lookup.
+	syncRequestsMu sync.Mutex
+	syncRequests   map[int64]*SyncReq
+	syncPeerCounts map[p2p.ID]int
+
+	// blockReqLimiter enforces a per-peer rate limit on BlockRequest messages
+	// to prevent a malicious peer from exhausting L2 RPC / signature store.
+	blockReqLimiter *PeerRateLimiter
+
+	// bannedPeers tracks peers banned for misbehavior, keyed by peer ID.
+	// Value is the ban expiration time. Expired entries are lazily cleaned
+	// up on lookup. This is an in-memory ban list; it does not persist
+	// across restarts.
+	bannedPeersMu sync.Mutex
+	bannedPeers   map[p2p.ID]time.Time
+
+	firstSync atomic.Bool
 }
 
-// NewBlockBroadcastReactor creates a new reactor.
+// NewBlockBroadcastReactor creates a new reactor. Routines are NOT started
+// here; the caller must invoke StartSequencerRoutines() once the node has
+// caught up and reached the upgrade height (done by blocksync's caught-up
+// callback or the upgrade callback in node.go).
 func NewBlockBroadcastReactor(
 	pool BlockPool,
 	stateV2 *StateV2,
-	waitSync bool,
 	logger log.Logger,
 	verifier SequencerVerifier,
+	l1Tracker L1Tracker,
+	sigStore *SignatureStore,
 ) *BlockBroadcastReactor {
 	r := &BlockBroadcastReactor{
-		pool:         pool,
-		stateV2:      stateV2,
-		waitSync:     waitSync,
-		recentBlocks: NewBlockRingBuffer(recentBlocksCapacity),
-		pendingCache: NewPendingBlockCache(),
-		seenBlocks:   NewHashSet(seenBlocksCapacity),
-		peerSent:     NewPeerHashSet(peerSentCapacity),
-		logger:       logger.With("module", "broadcastReactor"),
-		verifier:     verifier,
+		pool:            pool,
+		stateV2:         stateV2,
+		recentBlocks:    NewBlockRingBuffer(recentBlocksCapacity),
+		pendingCache:    NewPendingBlockCache(),
+		seenBlocks:      NewHashSet(seenBlocksCapacity),
+		peerGossiped:    NewPeerHashSet(peerGossipedCapacity),
+		syncRequests:    make(map[int64]*SyncReq),
+		syncPeerCounts:  make(map[p2p.ID]int),
+		bannedPeers:     make(map[p2p.ID]time.Time),
+		blockReqLimiter: NewPeerRateLimiter(blockRequestRateLimit, blockRequestBurst),
+		logger:          logger.With("module", "broadcastReactor"),
+		verifier:        verifier,
+		l1Tracker:       l1Tracker,
+		sigStore:        sigStore,
 	}
 	r.BaseReactor = *p2p.NewBaseReactor("BlockBroadcast", r)
 	return r
@@ -91,22 +161,57 @@ func (r *BlockBroadcastReactor) SetLogger(l log.Logger) {
 	r.logger = l.With("module", "broadcastReactor")
 }
 
+// SetPool swaps the BlockPool reference used for peer-height lookups. The
+// blocksync reactor calls this after rebuilding its pool (e.g. during a reorg
+// restart) so that peer selection in this reactor follows the new pool's view
+// of peer heights instead of the dead pool's frozen state.
+func (r *BlockBroadcastReactor) SetPool(pool BlockPool) {
+	r.poolMu.Lock()
+	defer r.poolMu.Unlock()
+	r.pool = pool
+}
+
+// getPool returns the current pool reference under the read lock. Callers
+// hold a local copy of the interface value, which keeps the underlying pool
+// reachable for the duration of their call even if SetPool swaps it.
+func (r *BlockBroadcastReactor) getPool() BlockPool {
+	r.poolMu.RLock()
+	defer r.poolMu.RUnlock()
+	return r.pool
+}
+
+// OnStart is intentionally a no-op. Sequencer routines are NOT started by
+// the service lifecycle — they are started explicitly by
+// StartSequencerRoutines() which is invoked by:
+//   - blocksync's caught-up callback (when local height reaches the upgrade
+//     height after catching up via blocksync), or
+//   - the upgrade callback in node.go (when a running PBFT node crosses the
+//     upgrade height via consensus).
+//
+// Until one of those fires, Receive() drops incoming messages via the
+// routinesStarted gate — the reactor is not yet able to validate or apply
+// blocks, and pretending otherwise would produce false "too high" / "too
+// low" errors against an uninitialized StateV2.
 func (r *BlockBroadcastReactor) OnStart() error {
-	if r.waitSync {
-		// Don't start sequencer routines on start if we are in wait sync mode
-		// will be started via StartSequencerRoutines
-		return nil
-	}
-	return r.StartSequencerRoutines()
+	return nil
 }
 
 func (r *BlockBroadcastReactor) StartSequencerRoutines() error {
-	if r.sequencerStarted {
-		r.logger.Error("Sequencer routines already started, skipping")
-		return nil
+	// only make sure `isRunning()` is true
+	if !r.IsRunning() {
+		if err := r.Start(); err != nil {
+			return err
+		}
 	}
 
-	r.waitSync = false
+	r.startMu.Lock()
+	defer r.startMu.Unlock()
+
+	r.firstSync.Store(true)
+
+	if r.routinesStarted.Load() {
+		return nil
+	}
 
 	if r.stateV2 != nil && !r.stateV2.IsRunning() {
 		if err := r.stateV2.Start(); err != nil {
@@ -114,18 +219,60 @@ func (r *BlockBroadcastReactor) StartSequencerRoutines() error {
 		}
 	}
 
-	if r.stateV2.IsSequencerMode() {
+	// Open the Receive() gate: from this point on, incoming P2P messages
+	// will be processed instead of being silently dropped.
+	r.routinesStarted.Store(true)
+
+	// Fullnode (no signer): only applyRoutine (P2P sync)
+	// Nodes with signer (ActiveSeq / HA-Leader / HA-Follower): only broadcastRoutine
+	//   - roleCheckRoutine is started by StateV2.OnStart()
+	//   - applyRoutine is NOT started (sequencer produces, HA uses Raft)
+	if r.stateV2.HasSigner() {
 		go r.broadcastRoutine()
 	} else {
 		go r.applyRoutine()
 	}
 
-	r.sequencerStarted = true
 	return nil
 }
 
 func (r *BlockBroadcastReactor) OnStop() {
 	r.logger.Info("Stopping BlockBroadcastReactor")
+
+	if err := r.stateV2.Stop(); err != nil {
+		r.logger.Error("failed to stop StateV2", "err", err)
+	}
+
+	r.startMu.Lock()
+	r.routinesStarted.Store(false)
+	r.startMu.Unlock()
+
+	r.bannedPeersMu.Lock()
+	r.bannedPeers = make(map[p2p.ID]time.Time)
+	r.bannedPeersMu.Unlock()
+
+	r.syncRequestsMu.Lock()
+	r.syncRequests = make(map[int64]*SyncReq)
+	r.syncPeerCounts = make(map[p2p.ID]int)
+	r.syncRequestsMu.Unlock()
+
+	r.recentBlocks.Clear()
+	r.pendingCache.Clear()
+	r.seenBlocks.Clear()
+	r.peerGossiped.Clear()
+}
+
+func (r *BlockBroadcastReactor) StopForReorg() error {
+	if r.IsRunning() {
+		if err := r.Stop(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *BlockBroadcastReactor) OnReset() error {
+	return r.stateV2.Reset()
 }
 
 func (r *BlockBroadcastReactor) GetChannels() []*p2p.ChannelDescriptor {
@@ -136,19 +283,42 @@ func (r *BlockBroadcastReactor) GetChannels() []*p2p.ChannelDescriptor {
 }
 
 func (r *BlockBroadcastReactor) AddPeer(peer p2p.Peer) {
-	r.peerSent.AddPeer(string(peer.ID()))
+	if r.isBanned(peer.ID()) {
+		r.logger.Info("Rejecting banned peer", "peer", peer.ID())
+		r.Switch.StopPeerForError(peer, fmt.Errorf("peer is banned"))
+		return
+	}
+	r.peerGossiped.AddPeer(string(peer.ID()))
+	r.blockReqLimiter.AddPeer(peer.ID())
 }
 
 func (r *BlockBroadcastReactor) RemovePeer(peer p2p.Peer, reason interface{}) {
-	r.peerSent.RemovePeer(string(peer.ID()))
+	r.peerGossiped.RemovePeer(string(peer.ID()))
+	r.removeSyncRequestsByPeer(peer.ID())
+	r.blockReqLimiter.RemovePeer(peer.ID())
 }
 
 func (r *BlockBroadcastReactor) Receive(chID byte, src p2p.Peer, msgBytes []byte) {
+	// Drop all messages until StartSequencerRoutines() has been called.
+	// This guards against messages arriving while blocksync is still running
+	// or before the upgrade height has been reached — at that point StateV2
+	// is not yet initialized and we cannot validate or apply blocks.
+	if !r.routinesStarted.Load() {
+		return
+	}
+	// L1 tracker: while L1 is stale, drop all inbound P2P messages. We may be
+	// blind to L1 SequencerUpdated events, so we neither accept/verify peer
+	// blocks (verification uses the verifier's stale L1-derived sequencer set,
+	// which could let a revoked-sequencer block through or mis-ban honest peers)
+	// nor serve sync requests. Placed before decode so nothing is processed.
+	if r.l1Tracker.IsHalt() {
+		return
+	}
 	r.logger.Debug("Receive message", "chId", chID, "src", src.ID(), "len", len(msgBytes))
 	msg, err := decodeMsg(msgBytes)
 	if err != nil {
 		r.logger.Error("Error decoding message", "src", src, "chId", chID, "err", err)
-		r.Switch.StopPeerForError(src, err)
+		r.banPeer(src, "invalid message encoding")
 		return
 	}
 
@@ -168,12 +338,31 @@ func (r *BlockBroadcastReactor) handleBroadcastMsg(msg interface{}, src p2p.Peer
 	switch msg := msg.(type) {
 	case *bcproto.BlockResponseV2:
 		if msg.Block != nil {
+			// Honest peers always produce a valid BlockV2 proto. A failure
+			// here is a malicious signal — ban the sender.
 			blockV2, err := types.BlockV2FromProto(msg.Block)
 			if err != nil {
-				r.logger.Error("Invalid BlockV2", "err", err)
+				r.logger.Error("Invalid BlockV2 from broadcast channel", "peer", src.ID(), "err", err)
+				r.banPeer(src, "invalid BlockV2 in broadcast")
 				return
 			}
-			r.onBlockV2(blockV2, src, true) // verify signature
+			localHeight := r.stateV2.LatestHeight()
+			// Reject blocks too old (already applied / below pruning window).
+			if localHeight-int64(blockV2.Number) > MaxPendingHeightBehind {
+				r.logger.Error("handleBroadcastMsg err, block height too low.",
+					"height", blockV2.Number, "hash", blockV2.Hash.Hex(), "peer", src.ID())
+				return
+			}
+			if int64(blockV2.Number)-localHeight > MaxPendingHeightAhead {
+				r.logger.Error("handleBroadcastMsg err, block height too high.",
+					"height", blockV2.Number, "localHeight", localHeight, "peer", src.ID())
+				return
+			}
+			if r.markSeen(blockV2.Hash) {
+				r.logger.Debug("onBlockV2 broadcast dedup", "number", blockV2.Number, "hash", blockV2.Hash.Hex())
+				return
+			}
+			r.onBlockV2(blockV2, src, true) // from broadcast channel
 			r.logger.Debug("handleBroadcastMsg", "src", src, "height", blockV2.Number, "hash", blockV2.Hash.Hex())
 		}
 	default:
@@ -184,22 +373,38 @@ func (r *BlockBroadcastReactor) handleBroadcastMsg(msg interface{}, src p2p.Peer
 func (r *BlockBroadcastReactor) handleSyncMsg(msg interface{}, src p2p.Peer) {
 	switch msg := msg.(type) {
 	case *bcproto.BlockRequest:
+		if !r.blockReqLimiter.Allow(src.ID()) {
+			r.logger.Debug("BlockRequest rate limited", "peer", src.ID(), "height", msg.Height)
+			return
+		}
 		r.onBlockRequest(msg, src)
 		r.logger.Debug("handleSyncMsg block request", "msg", msg, "src", src, "height", msg.Height)
 	case *bcproto.BlockResponseV2:
 		if msg.Block != nil {
-			blockV2, err := types.BlockV2FromProto(msg.Block)
-			if err != nil {
-				r.logger.Error("Invalid BlockV2", "err", err)
+			// Check request before full decode to reject unsolicited responses early
+			height := int64(msg.Block.Number)
+			if !r.checkAndTakeSyncRequest(src.ID(), height) {
+				r.logger.Error("Unsolicited sync response, dropping",
+					"peer", src.ID(), "height", height)
 				return
 			}
-			r.onBlockV2(blockV2, src, false) // no signature verification
+			// Honest peers always produce a valid BlockV2 proto. A failure here
+			// means the peer is sending malformed data — ban it. The slot we
+			// just consumed will be cleaned up by removeSyncRequestsByPeer via
+			// the RemovePeer callback when StopPeerForError disconnects.
+			blockV2, err := types.BlockV2FromProto(msg.Block)
+			if err != nil {
+				r.logger.Error("Invalid BlockV2 from sync channel", "peer", src.ID(), "err", err)
+				r.banPeer(src, "invalid BlockV2 in sync response")
+				return
+			}
+			r.onBlockV2(blockV2, src, false) // from sync channel
 			r.logger.Debug("handleSyncMsg block response", "src", src, "height", blockV2.Number, "hash", blockV2.Hash.Hex())
 		}
 	case *bcproto.NoBlockResponse:
-		r.logger.Debug("Peer does not have requested block", "peer", src, "height", msg.Height)
+		r.logger.Error("Peer does not have requested block", "peer", src, "height", msg.Height)
 	default:
-		r.logger.Debug("Ignoring unknown message on sync channel", "type", reflect.TypeOf(msg))
+		r.logger.Error("Ignoring unknown message on sync channel", "type", reflect.TypeOf(msg))
 	}
 }
 
@@ -207,15 +412,31 @@ func (r *BlockBroadcastReactor) handleSyncMsg(msg interface{}, src p2p.Peer) {
 // Routines
 // ============================================================================
 
-// broadcastRoutine: listen to stateV2 and broadcast new blocks
+// broadcastRoutine: listen to block source and broadcast to P2P.
+// Data source: HA mode reads from ha.Subscribe(), non-HA from broadcastCh.
+// HA Follower consumes channel to prevent buildup but does not broadcast.
 func (r *BlockBroadcastReactor) broadcastRoutine() {
 	r.logger.Info("Starting block broadcast routine")
+
+	var source <-chan *BlockV2
+	if r.stateV2.IsHAMode() {
+		source = r.stateV2.HASubscribe()
+	} else {
+		source = r.stateV2.BroadcastCh()
+	}
+
 	for {
 		select {
 		case <-r.Quit():
 			return
-		case block := <-r.stateV2.BroadcastCh():
+		case block := <-source:
+			// Always populate recentBlocks so the cache is warm if this follower
+			// is promoted to leader and starts serving block requests from fullnodes.
 			r.recentBlocks.Add(block)
+			// HA Follower: do not broadcast, only drain the channel.
+			if r.stateV2.IsHAMode() && !r.stateV2.IsHALeader() {
+				continue
+			}
 			r.broadcast(block)
 		}
 	}
@@ -228,6 +449,10 @@ func (r *BlockBroadcastReactor) applyRoutine() {
 	tickerSync := time.NewTicker(syncInterval)
 	defer tickerSync.Stop()
 	defer tickerApply.Stop()
+
+	// sync immediately
+	r.requestMissingBlocks(r.stateV2.LatestHeight()+1, r.getPool().MaxPeerHeight())
+	r.tryApplyFromCache()
 
 	for {
 		select {
@@ -245,40 +470,51 @@ func (r *BlockBroadcastReactor) applyRoutine() {
 // Core Logic
 // ============================================================================
 
-// onBlockV2: receive block from peer
-// verifySig: true for broadcast channel, false for sync channel
-func (r *BlockBroadcastReactor) onBlockV2(block *BlockV2, src p2p.Peer, verifySig bool) {
-	r.logger.Debug("onBlockV2", "number", block.Number, "hash", block.Hash.Hex(), "verifySig", verifySig)
-	// Dedup: skip if already seen, only for broadcast channel.
-	// Sync channel should not check dedup.
-	if r.markSeen(block.Hash) && verifySig {
-		r.logger.Debug("onBlockV2 broadcast dedup", "number", block.Number, "hash", block.Hash.Hex(), "verifySig", verifySig)
+// onBlockV2: receive block from peer.
+// fromBroadcast: true for broadcast channel (triggers gossip), false for sync channel.
+func (r *BlockBroadcastReactor) onBlockV2(block *BlockV2, src p2p.Peer, fromBroadcast bool) {
+	// Only Fullnode (no signer) processes P2P blocks:
+	//   - ActiveSequencer: sole producer, P2P blocks are only echoes or invalid
+	//   - HA nodes: receive blocks via Raft, not P2P
+	if r.stateV2.HasSigner() {
+		return
+	}
+
+	r.logger.Debug("onBlockV2", "number", block.Number, "hash", block.Hash.Hex(), "fromBroadcast", fromBroadcast)
+
+	// Unified signature verification for all incoming blocks.
+	// Ban the sender ONLY on a malicious-signal error (ErrInvalidSignature).
+	// ErrVerifierUnavailable means we can't decide (verifier not configured,
+	// L1 backend transient failure) — the peer may be honest, so we discard
+	// the block silently and let it retry on the next gossip/sync round.
+	if err := VerifyBlockSignature(r.verifier, block); err != nil {
+		if errors.Is(err, ErrInvalidSignature) {
+			r.logger.Error("Block signature invalid, banning peer",
+				"number", block.Number, "hash", block.Hash.Hex(), "err", err)
+			r.banPeer(src, "block signature verification failed")
+		} else {
+			// Verifier unavailable — local problem, not peer's fault.
+			r.logger.Error("Verifier unavailable, dropping block without ban",
+				"number", block.Number, "hash", block.Hash.Hex(), "err", err)
+		}
 		return
 	}
 
 	// Mark as received from this peer (don't send back)
-	r.markSentToPeer(src.ID(), block.Hash)
+	r.markGossipedToPeer(src.ID(), block.Hash)
 
 	localHeight := r.stateV2.LatestHeight()
 
-	// Try apply if it's the next block (height + parent match)
 	if r.isNextBlock(block) {
-		if err := r.applyBlock(block, verifySig); err != nil {
+		if err := r.applyBlock(block); err != nil {
 			r.logger.Error("Apply failed", "number", block.Number, "hash", block.Hash.Hex(), "err", err)
-			// Only cache blocks with valid signatures (don't cache signature failures)
-			if verifySig && !errors.Is(err, ErrInvalidSignature) {
-				r.logger.Debug("Apply failed, caching block", "number", block.Number, "hash", block.Hash.Hex())
-				r.pendingCache.Add(block, uint64(localHeight))
-			}
+			r.pendingCache.Add(block, uint64(localHeight))
 			return
 		}
-		// Gossip the latest block to other peers
-		if verifySig {
+		if fromBroadcast {
 			r.gossipBlock(block, src.ID())
 		}
-	} else if verifySig {
-		// Cache all other blocks (future or past for potential reorg)
-		r.logger.Debug("future block, caching", "number", block.Number, "hash", block.Hash.Hex())
+	} else {
 		r.pendingCache.Add(block, uint64(localHeight))
 	}
 }
@@ -303,7 +539,7 @@ func (r *BlockBroadcastReactor) tryApplyFromCache() {
 			break
 		}
 		r.logger.Debug("Trying to apply from cache", "number", block.Number, "hash", block.Hash.Hex())
-		if err := r.applyBlock(block, true); err != nil { // should signature verification
+		if err := r.applyBlock(block); err != nil {
 			r.logger.Error("Apply from cache failed", "number", block.Number, "err", err)
 			break
 		}
@@ -319,11 +555,17 @@ func (r *BlockBroadcastReactor) tryApplyFromCache() {
 // checkSyncGap: request missing blocks via SequencerSyncChannel
 // All sync requests go through this method (no longer uses blocksync pool)
 func (r *BlockBroadcastReactor) checkSyncGap() {
+	// L1 tracker: while L1 is stale, do not actively pull blocks from peers.
+	if r.l1Tracker.IsHalt() {
+		return
+	}
+
 	localHeight := r.stateV2.LatestHeight()
-	maxPeerHeight := r.pool.MaxPeerHeight()
+	maxPeerHeight := r.getPool().MaxPeerHeight()
 	gap := maxPeerHeight - localHeight
 	r.logger.Debug("Checking sync goroutines", "gap", gap, "localHeight", localHeight, "maxPeerHeight", maxPeerHeight)
-	if gap <= smallGapThreshold {
+	if gap <= smallGapThreshold &&
+		!r.firstSync.CompareAndSwap(true, false) {
 		return
 	}
 
@@ -331,17 +573,30 @@ func (r *BlockBroadcastReactor) checkSyncGap() {
 	r.requestMissingBlocks(localHeight+1, maxPeerHeight)
 }
 
-// requestMissingBlocks requests blocks in range [start, end] from peers
+// requestMissingBlocks requests blocks in range [start, end] from peers.
+// Respects maxOutstandingTotal, maxOutstandingPerPeer, and maxNewRequestsPerTick limits.
 func (r *BlockBroadcastReactor) requestMissingBlocks(start, end int64) {
+	r.removeTimeoutPeers()
+
 	peers := r.Switch.Peers().List()
 	if len(peers) == 0 {
 		return
 	}
 
 	for height := start; height <= end; height++ {
-		// Find a peer that has this height
+		if r.pendingSyncCount() >= maxPendingSyncRequests {
+			break
+		}
+		// Skip if already have a pending request for this height
+		r.syncRequestsMu.Lock()
+		_, exists := r.syncRequests[height]
+		r.syncRequestsMu.Unlock()
+		if exists {
+			continue
+		}
+
+		// findPeerWithHeight already skips peers exceeding per-peer limit
 		peer := r.findPeerWithHeight(peers, height)
-		r.logger.Debug("Finding peer with height", "height", height, "peer", peer.ID())
 		if peer == nil {
 			continue
 		}
@@ -352,14 +607,15 @@ func (r *BlockBroadcastReactor) requestMissingBlocks(start, end int64) {
 			r.logger.Error("Failed to encode BlockRequest", "height", height, "err", err)
 			continue
 		}
-		r.logger.Info("Requesting block", "height", height, "peer", peer.ID())
 		if !peer.TrySend(SequencerSyncChannel, bz) {
-			r.logger.Error("Failed to send BlockRequest (TrySend failed)", "height", height, "peer", peer.ID())
+			r.logger.Error("Failed to send BlockRequest", "height", height, "peer", peer.ID())
+			continue
 		}
+		r.recordSyncRequest(peer.ID(), height)
 	}
 }
 
-// findPeerWithHeight finds a random peer that has the given height.
+// findPeerWithHeight finds a random peer that has the given height and is within per-peer request limit.
 // Uses random start index to avoid always hitting the same peer.
 func (r *BlockBroadcastReactor) findPeerWithHeight(peers []p2p.Peer, height int64) p2p.Peer {
 	n := len(peers)
@@ -367,11 +623,11 @@ func (r *BlockBroadcastReactor) findPeerWithHeight(peers []p2p.Peer, height int6
 		return nil
 	}
 
-	// Random start, then wrap around
-	start := rand.Intn(n)
+	start := rand.Intn(n) //nolint:gosec // non-security: peer selection randomization
 	for i := 0; i < n; i++ {
 		peer := peers[(start+i)%n]
-		if r.pool.GetPeerHeight(peer.ID()) >= height {
+		if r.getPool().GetPeerHeight(peer.ID()) >= height &&
+			r.pendingSyncCountByPeer(peer.ID()) < maxPendingSyncPerPeer {
 			return peer
 		}
 	}
@@ -389,17 +645,11 @@ func (r *BlockBroadcastReactor) isNextBlock(block *BlockV2) bool {
 	return block.Number == currentBlock.Number+1 && block.ParentHash == currentBlock.Hash
 }
 
-// applyBlock: verify and apply a block atomically
-// Thread-safe: uses mutex to ensure sequential block application
-// verifySig: true for broadcast channel blocks, false for sync channel blocks
-func (r *BlockBroadcastReactor) applyBlock(block *BlockV2, verifySig bool) error {
+// applyBlock verifies signature, applies the block atomically, and persists the signature.
+// Thread-safe: uses mutex to ensure sequential block application.
+func (r *BlockBroadcastReactor) applyBlock(block *BlockV2) error {
 	r.applyMtx.Lock()
 	defer r.applyMtx.Unlock()
-
-	// Verify signature only for broadcast channel
-	if verifySig && !r.verifySignature(block) {
-		return ErrInvalidSignature
-	}
 
 	// Verify parent
 	currentBlock := r.stateV2.LatestBlock()
@@ -407,7 +657,7 @@ func (r *BlockBroadcastReactor) applyBlock(block *BlockV2, verifySig bool) error
 		return fmt.Errorf("parent mismatch")
 	}
 
-	// Update state via stateV2 (unified entry point)
+	// ApplyBlock handles geth apply + SaveSignature in one call.
 	if err := r.stateV2.ApplyBlock(block); err != nil {
 		return err
 	}
@@ -415,42 +665,8 @@ func (r *BlockBroadcastReactor) applyBlock(block *BlockV2, verifySig bool) error
 	// Add to recent blocks
 	r.recentBlocks.Add(block)
 
-	r.logger.Info("Applied block", "number", block.Number, "verifySig", verifySig)
+	r.logger.Info("Applied block", "number", block.Number)
 	return nil
-}
-
-func (r *BlockBroadcastReactor) verifySignature(block *BlockV2) bool {
-	if len(block.Signature) == 0 {
-		r.logger.Error("Signature verification failed: empty signature", "block", block.Number)
-		return false
-	}
-	pubKey, err := crypto.SigToPub(block.Hash.Bytes(), block.Signature)
-	if err != nil {
-		r.logger.Error("Signature verification failed: SigToPub error", "block", block.Number, "err", err)
-		return false
-	}
-	recoveredAddr := crypto.PubkeyToAddress(*pubKey)
-
-	if r.verifier == nil {
-		r.logger.Error("Sequencer verifier not set", "block", block.Number)
-		return false
-	}
-
-	isSeq, err := r.verifier.IsSequencer(context.Background(), recoveredAddr)
-	if err != nil {
-		r.logger.Error("Signature verification failed: verifier error",
-			"block", block.Number,
-			"recovered", recoveredAddr.Hex(),
-			"err", err)
-		return false
-	}
-	if !isSeq {
-		r.logger.Error("Signature verification failed: not a valid sequencer",
-			"block", block.Number,
-			"recovered", recoveredAddr.Hex())
-		return false
-	}
-	return true
 }
 
 // ============================================================================
@@ -462,14 +678,14 @@ func (r *BlockBroadcastReactor) markSeen(hash common.Hash) bool {
 	return r.seenBlocks.Add(hash) // Returns true if already existed
 }
 
-// markSentToPeer marks a block as sent to a peer.
-func (r *BlockBroadcastReactor) markSentToPeer(peerID p2p.ID, hash common.Hash) {
-	r.peerSent.Add(string(peerID), hash)
+// markGossipedToPeer marks a block as gossiped to/from a peer.
+func (r *BlockBroadcastReactor) markGossipedToPeer(peerID p2p.ID, hash common.Hash) {
+	r.peerGossiped.Add(string(peerID), hash)
 }
 
-// hasSentToPeer checks if block was sent to peer.
-func (r *BlockBroadcastReactor) hasSentToPeer(peerID p2p.ID, hash common.Hash) bool {
-	return r.peerSent.Contains(string(peerID), hash)
+// hasGossipedToPeer checks if a block has already been gossiped to/from a peer.
+func (r *BlockBroadcastReactor) hasGossipedToPeer(peerID p2p.ID, hash common.Hash) bool {
+	return r.peerGossiped.Contains(string(peerID), hash)
 }
 
 // gossipBlock forwards a block to all peers except the source.
@@ -477,7 +693,7 @@ func (r *BlockBroadcastReactor) hasSentToPeer(peerID p2p.ID, hash common.Hash) b
 func (r *BlockBroadcastReactor) gossipBlock(block *BlockV2, fromPeer p2p.ID) {
 	r.logger.Info("Gossiping block", "number", block.Number, "hash", block.Hash.Hex(), "fromPeer", fromPeer)
 	msg := &bcproto.BlockResponseV2{
-		Block: BlockV2ToProto(block),
+		Block: types.BlockV2ToProto(block),
 	}
 	bz, err := encodeMsg(msg)
 	if err != nil {
@@ -495,15 +711,147 @@ func (r *BlockBroadcastReactor) gossipBlock(block *BlockV2, fromPeer p2p.ID) {
 		}
 
 		// Skip if already sent
-		if r.hasSentToPeer(peerID, block.Hash) {
+		if r.hasGossipedToPeer(peerID, block.Hash) {
 			continue
 		}
 
 		// Send and mark
 		if peer.TrySend(BlockBroadcastChannel, bz) {
-			r.markSentToPeer(peerID, block.Hash)
+			r.markGossipedToPeer(peerID, block.Hash)
 		}
 	}
+}
+
+// ============================================================================
+// Sync Request Tracking
+// ============================================================================
+
+// recordSyncRequest records a pending sync request keyed by height.
+func (r *BlockBroadcastReactor) recordSyncRequest(peerID p2p.ID, height int64) {
+	r.syncRequestsMu.Lock()
+	defer r.syncRequestsMu.Unlock()
+	if old, ok := r.syncRequests[height]; ok {
+		r.syncPeerCounts[old.PeerID]--
+	}
+	r.syncRequests[height] = &SyncReq{
+		Height:   height,
+		PeerID:   peerID,
+		ExpireAt: time.Now().Add(syncRequestTTL),
+	}
+	r.syncPeerCounts[peerID]++
+}
+
+// checkAndTakeSyncRequest validates a sync response against pending requests.
+// Only removes the entry if peerID matches and request is not expired.
+func (r *BlockBroadcastReactor) checkAndTakeSyncRequest(peerID p2p.ID, height int64) bool {
+	r.syncRequestsMu.Lock()
+	defer r.syncRequestsMu.Unlock()
+
+	req, ok := r.syncRequests[height]
+	if !ok || req.PeerID != peerID || time.Now().After(req.ExpireAt) {
+		return false
+	}
+	delete(r.syncRequests, height)
+	r.syncPeerCounts[peerID]--
+	return true
+}
+
+// removeTimeoutPeers scans pending sync requests and kicks any peer whose
+// request has expired. Map cleanup (syncRequests / syncPeerCounts) is
+// delegated to removeSyncRequestsByPeer via the RemovePeer callback, so
+// this method itself does not mutate the maps.
+func (r *BlockBroadcastReactor) removeTimeoutPeers() {
+	seen := make(map[p2p.ID]struct{})
+
+	r.syncRequestsMu.Lock()
+	now := time.Now()
+	for _, req := range r.syncRequests {
+		if now.After(req.ExpireAt) {
+			seen[req.PeerID] = struct{}{}
+		}
+	}
+	r.syncRequestsMu.Unlock()
+
+	for peerID := range seen {
+		peer := r.Switch.Peers().Get(peerID)
+		if peer == nil {
+			continue
+		}
+		r.banPeer(peer, "sync request timed out")
+	}
+}
+
+// pendingSyncCount returns the total number of pending sync requests.
+func (r *BlockBroadcastReactor) pendingSyncCount() int {
+	r.syncRequestsMu.Lock()
+	defer r.syncRequestsMu.Unlock()
+	return len(r.syncRequests)
+}
+
+// pendingSyncCountByPeer returns the number of pending sync requests for a specific peer.
+func (r *BlockBroadcastReactor) pendingSyncCountByPeer(peerID p2p.ID) int {
+	r.syncRequestsMu.Lock()
+	defer r.syncRequestsMu.Unlock()
+	return r.syncPeerCounts[peerID]
+}
+
+// removeSyncRequestsByPeer removes all pending requests for a disconnected peer.
+func (r *BlockBroadcastReactor) removeSyncRequestsByPeer(peerID p2p.ID) {
+	r.syncRequestsMu.Lock()
+	defer r.syncRequestsMu.Unlock()
+	for h, req := range r.syncRequests {
+		if req.PeerID == peerID {
+			delete(r.syncRequests, h)
+		}
+	}
+	delete(r.syncPeerCounts, peerID)
+}
+
+// ============================================================================
+// Peer Ban
+// ============================================================================
+
+// banPeer adds a peer to the ban list for peerBanDuration.
+// The peer is also immediately stopped. Expired entries are lazily evicted on
+// the next isBanned call for the same peer.
+//
+// Persistent peers (whitelisted via [p2p].persistent_peers) are exempt: they
+// still get disconnected — so connection state is fully reset via RemovePeer
+// callbacks — but are NOT added to bannedPeers. The Switch will automatically
+// reconnect them, and on reconnect AddPeer's isBanned check will let them in.
+func (r *BlockBroadcastReactor) banPeer(peer p2p.Peer, reason string) {
+	peerID := peer.ID()
+
+	if peer.IsPersistent() {
+		r.logger.Error("[WHITELIST_ALARM] whitelisted peer misbehaved, will reconnect",
+			"peer", peerID, "reason", reason)
+		r.Switch.StopPeerForError(peer, fmt.Errorf("%s", reason))
+		return
+	}
+
+	r.bannedPeersMu.Lock()
+	r.bannedPeers[peerID] = time.Now().Add(peerBanDuration)
+	r.bannedPeersMu.Unlock()
+
+	r.logger.Error("Banning peer", "peer", peerID, "reason", reason, "duration", peerBanDuration)
+	r.Switch.StopPeerForError(peer, fmt.Errorf("%s", reason))
+}
+
+// isBanned returns true if the peer is currently banned.
+// Lazily removes expired entries.
+func (r *BlockBroadcastReactor) isBanned(peerID p2p.ID) bool {
+	r.bannedPeersMu.Lock()
+	defer r.bannedPeersMu.Unlock()
+
+	expireAt, ok := r.bannedPeers[peerID]
+	if !ok {
+		return false
+	}
+	if time.Now().After(expireAt) {
+		delete(r.bannedPeers, peerID)
+		return false
+	}
+	return true
 }
 
 // ============================================================================
@@ -511,6 +859,19 @@ func (r *BlockBroadcastReactor) gossipBlock(block *BlockV2, fromPeer p2p.ID) {
 // ============================================================================
 
 func (r *BlockBroadcastReactor) onBlockRequest(msg *bcproto.BlockRequest, src p2p.Peer) {
+	localHeight := r.stateV2.LatestHeight()
+	if msg.Height <= 0 || msg.Height > localHeight {
+		r.logger.Info("Rejecting out-of-range BlockRequest",
+			"peer", src.ID(), "requested", msg.Height, "localHeight", localHeight)
+		bz, err := encodeMsg(&bcproto.NoBlockResponse{Height: msg.Height})
+		if err != nil {
+			r.logger.Error("Failed to encode NoBlockResponse", "height", msg.Height, "err", err)
+			return
+		}
+		src.TrySend(SequencerSyncChannel, bz)
+		return
+	}
+
 	// Try to get from recent blocks cache first
 	block := r.recentBlocks.GetByHeight(uint64(msg.Height))
 
@@ -534,8 +895,19 @@ func (r *BlockBroadcastReactor) onBlockRequest(msg *bcproto.BlockRequest, src p2
 		return
 	}
 
+	// Attach signature from store if block doesn't already carry one
+	if len(block.Signature) == 0 && r.sigStore != nil {
+		if sig, err := r.sigStore.GetSignature(block.Hash); err == nil {
+			block.Signature = sig
+		} else {
+			r.logger.Error("Signature not found in store, sending block without signature",
+				"height", msg.Height, "hash", block.Hash.Hex(), "err", err)
+			return
+		}
+	}
+
 	resp := &bcproto.BlockResponseV2{
-		Block: BlockV2ToProto(block),
+		Block: types.BlockV2ToProto(block),
 	}
 	bz, err := encodeMsg(resp)
 	if err != nil {
@@ -548,7 +920,7 @@ func (r *BlockBroadcastReactor) onBlockRequest(msg *bcproto.BlockRequest, src p2
 // broadcast only for sequencer
 func (r *BlockBroadcastReactor) broadcast(block *BlockV2) {
 	resp := &bcproto.BlockResponseV2{
-		Block: BlockV2ToProto(block),
+		Block: types.BlockV2ToProto(block),
 	}
 	bz, err := encodeMsg(resp)
 	if err != nil {
@@ -557,58 +929,6 @@ func (r *BlockBroadcastReactor) broadcast(block *BlockV2) {
 	}
 	r.Switch.Broadcast(BlockBroadcastChannel, bz)
 	r.logger.Info("Broadcast block", "number", block.Number, "hash", block.Hash.Hex())
-}
-
-// ============================================================================
-// Proto Conversion
-// ============================================================================
-
-func BlockV2ToProto(block *BlockV2) *seqproto.BlockV2 {
-	var baseFee []byte
-	if block.BaseFee != nil {
-		baseFee = block.BaseFee.Bytes()
-	}
-	return &seqproto.BlockV2{
-		ParentHash:         block.ParentHash.Bytes(),
-		Miner:              block.Miner.Bytes(),
-		Number:             block.Number,
-		GasLimit:           block.GasLimit,
-		BaseFee:            baseFee,
-		Timestamp:          block.Timestamp,
-		Transactions:       block.Transactions,
-		StateRoot:          block.StateRoot.Bytes(),
-		GasUsed:            block.GasUsed,
-		ReceiptRoot:        block.ReceiptRoot.Bytes(),
-		LogsBloom:          block.LogsBloom,
-		WithdrawTrieRoot:   block.WithdrawTrieRoot.Bytes(),
-		NextL1MessageIndex: block.NextL1MessageIndex,
-		Hash:               block.Hash.Bytes(),
-		Signature:          block.Signature,
-	}
-}
-
-func ProtoToBlockV2(pb *seqproto.BlockV2) *BlockV2 {
-	baseFee := new(big.Int)
-	if len(pb.BaseFee) > 0 {
-		baseFee.SetBytes(pb.BaseFee)
-	}
-	return &BlockV2{
-		ParentHash:         common.BytesToHash(pb.ParentHash),
-		Miner:              common.BytesToAddress(pb.Miner),
-		Number:             pb.Number,
-		GasLimit:           pb.GasLimit,
-		BaseFee:            baseFee,
-		Timestamp:          pb.Timestamp,
-		Transactions:       pb.Transactions,
-		StateRoot:          common.BytesToHash(pb.StateRoot),
-		GasUsed:            pb.GasUsed,
-		ReceiptRoot:        common.BytesToHash(pb.ReceiptRoot),
-		LogsBloom:          pb.LogsBloom,
-		WithdrawTrieRoot:   common.BytesToHash(pb.WithdrawTrieRoot),
-		NextL1MessageIndex: pb.NextL1MessageIndex,
-		Hash:               common.BytesToHash(pb.Hash),
-		Signature:          pb.Signature,
-	}
 }
 
 // ==================== Message Encoding/Decoding ====================

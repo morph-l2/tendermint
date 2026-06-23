@@ -3,12 +3,14 @@ package blocksync
 import (
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/tendermint/tendermint/l2node"
 	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/p2p"
 	bcproto "github.com/tendermint/tendermint/proto/tendermint/blocksync"
+	"github.com/tendermint/tendermint/sequencer"
 	sm "github.com/tendermint/tendermint/state"
 	"github.com/tendermint/tendermint/store"
 	"github.com/tendermint/tendermint/types"
@@ -25,8 +27,8 @@ const (
 	// within this much of the system time.
 	// stopSyncingDurationMinutes = 10
 
-	// ask for best height every 10s
-	statusUpdateIntervalSeconds = 10
+	// ask for best height every 5s
+	statusUpdateIntervalSeconds = 5
 	// check if we should switch to consensus reactor
 	switchToConsensusIntervalSeconds = 1
 )
@@ -40,6 +42,11 @@ type consensusReactor interface {
 type sequencerReactor interface {
 	// for when we switch from blockchain reactor to sequencer mode
 	StartSequencerRoutines() error
+	// SetPool updates the peer-height pool reference used by the broadcast
+	// reactor. Called after a reorg rebuild so the broadcast reactor stops
+	// reading from the discarded pool. The argument is the *blocksync.BlockPool
+	// directly; it satisfies sequencer.BlockPool by structural typing.
+	SetPool(sequencer.BlockPool)
 }
 
 // SequencerState interface for accessing sequencer state (avoids import cycle)
@@ -72,8 +79,16 @@ type Reactor struct {
 	pool      *BlockPool
 	blockSync bool
 
-	requestsCh <-chan BlockRequest
-	errorsCh   <-chan peerError
+	// Bidirectional so the same buffers can be handed to a freshly-built BlockPool
+	// during reorg (see SwitchToBlockSyncFromReorg), while still being read here.
+	requestsCh chan BlockRequest
+	errorsCh   chan peerError
+
+	poolWg sync.WaitGroup
+
+	// Sequencer signature verification (set after upgrade via SetVerifier/SetSigStore)
+	verifier sequencer.SequencerVerifier
+	sigStore *sequencer.SignatureStore
 }
 
 // NewReactor returns new reactor instance.
@@ -139,6 +154,16 @@ func (bcR *Reactor) SetStateV2(stateV2 SequencerState) {
 	bcR.stateV2 = stateV2
 }
 
+// SetVerifier sets the sequencer verifier for block signature validation.
+func (bcR *Reactor) SetVerifier(v sequencer.SequencerVerifier) {
+	bcR.verifier = v
+}
+
+// SetSigStore sets the signature store for persisting/attaching block signatures.
+func (bcR *Reactor) SetSigStore(s *sequencer.SignatureStore) {
+	bcR.sigStore = s
+}
+
 // Pool returns the block pool for broadcast reactor to check peer heights.
 func (bcR *Reactor) Pool() *BlockPool {
 	return bcR.pool
@@ -151,9 +176,17 @@ func (bcR *Reactor) OnStart() error {
 		if err != nil {
 			return err
 		}
-		go bcR.poolRoutine(false)
+		bcR.startPoolRoutine(false)
 	}
 	return nil
+}
+
+func (bcR *Reactor) startPoolRoutine(stateSynced bool) {
+	bcR.poolWg.Add(1)
+	go func() {
+		defer bcR.poolWg.Done()
+		bcR.poolRoutine(stateSynced)
+	}()
 }
 
 // SwitchToBlockSync is called by the state sync reactor when switching to block sync.
@@ -166,8 +199,47 @@ func (bcR *Reactor) SwitchToBlockSync(state sm.State) error {
 	if err != nil {
 		return err
 	}
-	go bcR.poolRoutine(true)
+	bcR.startPoolRoutine(true)
 	return nil
+}
+
+func (bcR *Reactor) StopForReorg() error {
+	if bcR.IsRunning() {
+		if err := bcR.Stop(); err != nil {
+			return err
+		}
+	}
+	bcR.poolWg.Wait()
+	return nil
+}
+
+// SwitchToBlockSyncFromReorg restarts block sync after a reorg by rebuilding
+// the BlockPool. currentHeight is the post-reorg head; the new pool will
+// request from currentHeight+1.
+//
+// Stop -> Reset -> swap pool -> Start, on the same reactor instance.
+//
+// Reset() requires the reactor to be in stopped state. It can legitimately
+// fail when the reactor was never started yet (e.g. early init paths,
+// certain test setups). Log the error rather than abort: continuing to
+// rebuild the pool and call Start() is the right recovery, and silent
+// `_ = bcR.Reset()` would hide genuine lifecycle drift bugs.
+func (bcR *Reactor) SwitchToBlockSyncFromReorg(currentHeight int64) error {
+	if err := bcR.Reset(); err != nil {
+		bcR.Logger.Error("reset blocksync reactor failed; continuing", "err", err)
+	}
+
+	bcR.pool = NewBlockPool(currentHeight+1, bcR.requestsCh, bcR.errorsCh)
+	bcR.pool.SetLogger(bcR.Logger)
+
+	// Point the sequencer broadcast reactor at the new pool so peer-height
+	// lookups stop reading the discarded one. Best-effort; in PBFT-only or
+	// test setups SEQUENCER may not be registered.
+	if seqR, ok := bcR.Switch.Reactor("SEQUENCER").(sequencerReactor); ok {
+		seqR.SetPool(bcR.pool)
+	}
+
+	return bcR.Start()
 }
 
 // OnStop implements service.Service.
@@ -178,6 +250,11 @@ func (bcR *Reactor) OnStop() {
 		}
 	}
 }
+
+// OnReset implements service.Service.
+// Pool is rebuilt explicitly in SwitchToBlockSyncFromReorg before Start, so
+// nothing to do here; kept only so BaseService.Reset() doesn't panic.
+func (bcR *Reactor) OnReset() error { return nil }
 
 // GetChannels implements Reactor
 func (bcR *Reactor) GetChannels() []*p2p.ChannelDescriptor {
@@ -269,6 +346,19 @@ func (bcR *Reactor) respondToPeerV2(msg *bcproto.BlockRequest, src p2p.Peer) boo
 		return src.TrySend(BlocksyncChannel, msgBytes)
 	}
 
+	// Attach signature from store; if unavailable, refuse to serve
+	sig, err := bcR.sigStore.GetSignature(blockData.Hash)
+	if err != nil {
+		bcR.Logger.Error("No signature available for block, refusing to serve",
+			"height", msg.Height, "err", err)
+		msgBytes, encErr := EncodeMsg(&bcproto.NoBlockResponse{Height: msg.Height})
+		if encErr != nil {
+			return false
+		}
+		return src.TrySend(BlocksyncChannel, msgBytes)
+	}
+	blockData.Signature = sig
+
 	bcR.Logger.Debug("respondToPeerV2: got block from geth",
 		"height", msg.Height,
 		"hash", blockData.Hash.Hex())
@@ -290,22 +380,53 @@ func (bcR *Reactor) L2Node() l2node.L2Node {
 	return bcR.l2Node
 }
 
-// syncBlockV2 handles syncing a single BlockV2 in sequencer mode.
-// No signature verification during sync - only broadcast channel verifies signatures.
-// Returns true if sync was successful, false if there was an error (already handled).
-func (bcR *Reactor) syncBlockV2(block types.SyncableBlock, blocksSynced *uint64, lastRate *float64, lastHundred *time.Time) bool {
+// verifyBlockV2 asserts block is a *types.BlockV2 and verifies its sequencer signature
+// (history-aware lookup via IsSequencerAt). Pure check: no pool side effects — the caller
+// decides what to redo/ban. Shared by the boundary check and syncBlockV2.
+func (bcR *Reactor) verifyBlockV2(block types.SyncableBlock) (*types.BlockV2, error) {
 	blockV2, ok := block.(*types.BlockV2)
 	if !ok {
-		bcR.Logger.Error("Expected BlockV2 after upgrade", "height", block.GetHeight())
-		bcR.pool.RedoRequest(block.GetHeight())
+		return nil, fmt.Errorf("expected BlockV2 at height %d, got V1", block.GetHeight())
+	}
+	if err := sequencer.VerifyBlockSignature(bcR.verifier, blockV2); err != nil {
+		return nil, fmt.Errorf("block signature verification failed at height %d: %w", blockV2.GetHeight(), err)
+	}
+	return blockV2, nil
+}
+
+// redoAndBan re-queues the block's height and disconnects the peer that served it.
+// Single-block granularity: the PBFT path bans only the mismatched block, while the
+// one-time boundary check calls it for both blocks.
+func (bcR *Reactor) redoAndBan(block types.SyncableBlock, reason string) {
+	bcR.Logger.Error("blocksync redo+ban", "height", block.GetHeight(), "reason", reason)
+	peerID := bcR.pool.RedoRequest(block.GetHeight())
+	if peer := bcR.Switch.Peers().Get(peerID); peer != nil {
+		bcR.Switch.StopPeerForError(peer, fmt.Errorf("blocksync: %s", reason))
+	}
+}
+
+// syncBlockV2 handles syncing a single BlockV2 in sequencer mode.
+// Verifies block signature using the history-aware verifier, then applies.
+func (bcR *Reactor) syncBlockV2(block types.SyncableBlock, blocksSynced *uint64, lastRate *float64, lastHundred *time.Time) bool {
+	blockV2, err := bcR.verifyBlockV2(block)
+	if err != nil {
+		// Wrong type or bad signature == the peer served bad/forged data: redo + ban.
+		bcR.redoAndBan(block, fmt.Sprintf("BlockV2 verification failed: %v", err))
 		return false
 	}
 
-	// Apply BlockV2 via stateV2 (no signature verification during sync)
+	// Apply BlockV2 via stateV2. The block is already signature-verified (authentic), so an
+	// apply failure is almost always a local issue (geth state), not the peer's fault — redo
+	// without banning to avoid dropping honest peers during a local hiccup.
 	if err := bcR.stateV2.ApplyBlock(blockV2); err != nil {
 		bcR.Logger.Error("Failed to apply BlockV2", "height", blockV2.Number, "err", err)
 		bcR.pool.RedoRequest(blockV2.GetHeight())
 		return false
+	}
+
+	// Persist signature for historical serving
+	if err := bcR.sigStore.SaveSignature(blockV2.Hash, blockV2.Signature); err != nil {
+		panic(fmt.Sprintf("failed to save signature at height %d: %v", blockV2.Number, err))
 	}
 
 	bcR.pool.PopRequest()
@@ -372,7 +493,7 @@ func (bcR *Reactor) Receive(chID byte, src p2p.Peer, msgBytes []byte) {
 	case *bcproto.StatusResponse:
 		// Got a peer status. Unverified.
 		bcR.Logger.Debug("SetPeerRange", "peer", src.ID(), "base", msg.Base, "height", msg.Height)
-		bcR.pool.SetPeerRange(src.ID(), msg.Base, msg.Height)
+		bcR.pool.SetPeerRange(src, msg.Base, msg.Height)
 	case *bcproto.NoBlockResponse:
 		bcR.Logger.Debug("Peer does not have requested block", "peer", src, "height", msg.Height)
 	default:
@@ -389,10 +510,6 @@ func (bcR *Reactor) poolRoutine(stateSynced bool) {
 	trySyncTicker := time.NewTicker(trySyncIntervalMS * time.Millisecond)
 	defer trySyncTicker.Stop()
 
-	statusUpdateTicker := time.NewTicker(statusUpdateIntervalSeconds * time.Second)
-	// no longer stop the ticker, reuse it for sequencer mode status updates
-	//defer statusUpdateTicker.Stop()
-
 	switchToConsensusTicker := time.NewTicker(switchToConsensusIntervalSeconds * time.Second)
 	defer switchToConsensusTicker.Stop()
 
@@ -406,7 +523,12 @@ func (bcR *Reactor) poolRoutine(stateSynced bool) {
 
 	didProcessCh := make(chan struct{}, 1)
 
+	bcR.poolWg.Add(1)
 	go func() {
+		defer bcR.poolWg.Done()
+		statusUpdateTicker := time.NewTicker(statusUpdateIntervalSeconds * time.Second)
+		// no longer stop the ticker, reuse it for sequencer mode status updates
+		defer statusUpdateTicker.Stop()
 		for {
 			select {
 			case <-bcR.Quit():
@@ -468,6 +590,7 @@ FOR_LOOP:
 					bcR.Logger.Info("Switching to sequencer mode", "height", height)
 					seqR, ok := bcR.Switch.Reactor("SEQUENCER").(sequencerReactor)
 					if ok {
+						bcR.BroadcastStatusRequest()
 						if err := seqR.StartSequencerRoutines(); err != nil {
 							bcR.Logger.Error("Failed to start sequencer mode", "err", err)
 						}
@@ -509,18 +632,9 @@ FOR_LOOP:
 				didProcessCh <- struct{}{}
 			}
 
-			if firstSync.GetHeight()+1 == upgrade.UpgradeBlockHeight {
-				if err := bcR.handleTheLastTMBlock(state, firstSync); err != nil {
-					bcR.Logger.Error("Error in apply last tendermint block", "err", err)
-					peerID := bcR.pool.RedoRequest(firstSync.GetHeight())
-					peer := bcR.Switch.Peers().Get(peerID)
-					if peer != nil {
-						bcR.Switch.StopPeerForError(peer, fmt.Errorf("handleTheLastTMBlock error: %v", err))
-					}
-					continue FOR_LOOP
-				}
-				bcR.pool.PopRequest()
-				blocksSynced++
+			// Detect and process the last PBFT block at the timestamp-driven upgrade
+			// boundary (runs at most once; no-op after the boundary height is recorded).
+			if bcR.checkAndHandleTheLastTMBlock(state, firstSync, secondSync, &blocksSynced) {
 				continue FOR_LOOP
 			}
 
@@ -530,8 +644,20 @@ FOR_LOOP:
 				continue FOR_LOOP
 			}
 
-			// PBFT mode: type assert to *types.Block
-			first, second := firstSync.(*types.Block), secondSync.(*types.Block)
+			// PBFT mode: both blocks must be V1. A peer that serves a V2 block in this
+			// range is malicious or on a bad fork — ban only the mismatched one(s) (this
+			// is the hot path; avoid false-banning the peer that served a correct block).
+			first, ok1 := firstSync.(*types.Block)
+			second, ok2 := secondSync.(*types.Block)
+			if !ok1 || !ok2 {
+				if !ok1 {
+					bcR.redoAndBan(firstSync, "expected V1 block in PBFT range")
+				}
+				if !ok2 {
+					bcR.redoAndBan(secondSync, "expected V1 block in PBFT range")
+				}
+				continue FOR_LOOP
+			}
 
 			firstParts, err := first.MakePartSet(types.BlockPartSizeBytes)
 			if err != nil {
@@ -624,10 +750,34 @@ func (bcR *Reactor) BroadcastStatusRequest() error {
 	return nil
 }
 
-// just skip the last tendermint block commit check.
-// TODO: consider add the commit check in the future or using batch derivation reorg
+func (bcR *Reactor) checkAndHandleTheLastTMBlock(state sm.State, first, second types.SyncableBlock, blocksSynced *uint64) bool {
+	if upgrade.UpgradeBlockHeight() >= 0 {
+		return false // boundary already discovered; only runs once
+	}
+	if first.GetBlockVersion() != types.Version1 || !upgrade.IsUpgradedByTs(first.GetTime()) {
+		return false // not the boundary; fall through to the normal sync paths
+	}
+	if _, err := bcR.verifyBlockV2(second); err != nil {
+		bcR.redoAndBan(first, fmt.Sprintf("boundary check failed: %v", err))
+		bcR.redoAndBan(second, fmt.Sprintf("boundary: second must be a valid V2 block: %v", err))
+		return true
+	}
+	if err := bcR.handleTheLastTMBlock(state, first); err != nil {
+		bcR.redoAndBan(first, fmt.Sprintf("apply last tendermint block: %v", err))
+		bcR.redoAndBan(second, fmt.Sprintf("boundary rolled back after first failed: %v", err))
+		return true
+	}
+	upgrade.SetUpgradeBlockHeight(first.GetHeight())
+	bcR.pool.PopRequest()
+	*blocksSynced++
+	return true
+}
+
 func (bcR *Reactor) handleTheLastTMBlock(state sm.State, lastSyncable types.SyncableBlock) error {
-	last := lastSyncable.(*types.Block)
+	last, ok := lastSyncable.(*types.Block)
+	if !ok {
+		return fmt.Errorf("handleTheLastTMBlock: expected V1 block at height %d", lastSyncable.GetHeight())
+	}
 	lastParts, err := last.MakePartSet(types.BlockPartSizeBytes)
 	if err != nil {
 		bcR.Logger.Error(
@@ -665,12 +815,21 @@ func (bcR *Reactor) handleTheLastTMBlock(state sm.State, lastSyncable types.Sync
 
 func (bcR *Reactor) getHeight() int64 {
 	height := bcR.store.Height()
-	// In sequencer mode, get height directly from l2Node (geth)
-	if bcR.l2Node != nil && upgrade.IsUpgraded(height+1) {
+	if !upgrade.IsUpgraded(height + 1) {
+		return height
+	}
+	// In sequencer mode, get height from state v2 or L2 node
+	if bcR.stateV2 != nil {
+		if l2Height := bcR.stateV2.LatestHeight(); l2Height > height {
+			return l2Height
+		}
+	}
+
+	if bcR.l2Node != nil {
 		if l2Block, err := bcR.l2Node.GetLatestBlockV2(); err == nil && l2Block != nil {
 			bcR.Logger.Debug("StatusRequest", "l2Height", l2Block.Number)
 			if l2Height := int64(l2Block.Number); l2Height > height {
-				height = l2Height
+				return l2Height
 			}
 		}
 	}

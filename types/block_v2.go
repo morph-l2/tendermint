@@ -51,44 +51,30 @@ func (b *BlockV2) GetHash() []byte {
 	return b.Hash.Bytes()
 }
 
+func (b *BlockV2) GetTime() int64 { return int64(b.Timestamp) * 1000 }
+
+func (b *BlockV2) GetBlockVersion() BlockVersion { return Version2 }
+
+// BlockVersion identifies the wire format of a SyncableBlock: Version1 is the
+// PBFT-era tendermint block, Version2 is the post-upgrade sequencer block.
+type BlockVersion uint8
+
+const (
+	Version1 BlockVersion = 1
+	Version2 BlockVersion = 2
+)
+
 // SyncableBlock is an interface that both old Block and new BlockV2 can implement
 // for compatibility in the block pool.
 type SyncableBlock interface {
 	GetHeight() int64
 	GetHash() []byte
+	GetTime() int64
+	GetBlockVersion() BlockVersion
 }
 
 // Ensure BlockV2 implements SyncableBlock
 var _ SyncableBlock = (*BlockV2)(nil)
-
-// SequencerAddress is the expected sequencer address for signature verification.
-// This will be set by the sequencer package at init time.
-var SequencerAddress common.Address
-
-// SetSequencerAddress sets the expected sequencer address.
-func SetSequencerAddress(addr common.Address) {
-	SequencerAddress = addr
-}
-
-// IsSequencerAddress checks if the given address is the expected sequencer.
-func IsSequencerAddress(addr common.Address) bool {
-	return addr == SequencerAddress
-}
-
-// RecoverBlockV2Signer recovers the signer address from the block's signature.
-func RecoverBlockV2Signer(block *BlockV2) (common.Address, error) {
-	if len(block.Signature) == 0 {
-		return common.Address{}, fmt.Errorf("block has no signature")
-	}
-
-	// Recover the public key from the signature
-	pubKey, err := crypto.SigToPub(block.Hash.Bytes(), block.Signature)
-	if err != nil {
-		return common.Address{}, fmt.Errorf("failed to recover public key: %w", err)
-	}
-
-	return crypto.PubkeyToAddress(*pubKey), nil
-}
 
 // BlockV2FromProto converts a proto BlockV2 to types.BlockV2.
 func BlockV2FromProto(pb *seqproto.BlockV2) (*BlockV2, error) {
@@ -102,6 +88,10 @@ func BlockV2FromProto(pb *seqproto.BlockV2) (*BlockV2, error) {
 	}
 	if len(pb.Hash) != 32 {
 		return nil, errors.New("invalid block hash length")
+	}
+
+	if len(pb.Signature) != crypto.SignatureLength {
+		return nil, fmt.Errorf("invalid signature length: got %d, want %d", len(pb.Signature), crypto.SignatureLength)
 	}
 
 	baseFee := new(big.Int)

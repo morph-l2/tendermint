@@ -81,7 +81,7 @@ func (conR *Reactor) OnStart() error {
 	if upgrade.IsUpgraded(conR.conS.Height) {
 		conR.Logger.Info("Already upgraded to sequencer mode, consensus reactor will not start",
 			"height", conR.conS.Height,
-			"upgradeHeight", upgrade.UpgradeBlockHeight)
+			"upgradeHeight", upgrade.UpgradeBlockHeight())
 		return nil
 	}
 
@@ -113,14 +113,6 @@ func (conR *Reactor) OnStop() {
 	}
 }
 
-// StopForUpgrade stops the consensus reactor when upgrading to sequencer mode.
-// This is called when the chain reaches the upgrade height.
-func (conR *Reactor) StopForUpgrade() {
-	conR.Logger.Info("Stopping consensus reactor for sequencer upgrade",
-		"height", conR.conS.Height,
-		"upgradeHeight", upgrade.UpgradeBlockHeight)
-	conR.OnStop()
-}
 
 // SwitchToConsensus switches from block_sync mode to consensus mode.
 // It resets the state, turns off block_sync, and starts the consensus state-machine
@@ -128,7 +120,7 @@ func (conR *Reactor) SwitchToConsensus(state sm.State, skipWAL bool) {
 	conR.Logger.Info("SwitchToConsensus")
 
 	// We have no votes, so reconstruct LastCommit from SeenCommit.
-	if state.LastBlockHeight > 0 {
+	if state.LastBlockHeight > 0 && !upgrade.IsUpgraded(state.LastBlockHeight+1) {
 		conR.conS.reconstructLastCommit(state)
 	}
 
