@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/go-kit/kit/metrics"
 	"github.com/morph-l2/go-ethereum/common"
 	"github.com/tendermint/tendermint/l2node"
 	"github.com/tendermint/tendermint/libs/log"
@@ -43,6 +44,14 @@ func (m *mockSequencerVerifier) IsSequencerAt(addr common.Address, l2Height uint
 	}
 	return m.isSequencer, nil
 }
+
+type recordingGauge struct {
+	value float64
+}
+
+func (g *recordingGauge) With(labelValues ...string) metrics.Gauge { return g }
+func (g *recordingGauge) Set(value float64)                        { g.value = value }
+func (g *recordingGauge) Add(delta float64)                        { g.value += delta }
 
 // mockSequencerHA is a mock implementation of SequencerHA for testing.
 type mockSequencerHA struct {
@@ -337,6 +346,55 @@ func TestStateV2_IsActiveSequencer_VerifierError(t *testing.T) {
 
 	if s.isActiveSequencer() {
 		t.Error("should return false when verifier returns error")
+	}
+}
+
+func TestStateV2_IsActiveSequencer_ReportsInactiveAfterBecomingInactive(t *testing.T) {
+	logger := log.NewNopLogger()
+	verifier := &mockSequencerVerifier{isSequencer: true}
+	signer := &mockSignerImpl{address: common.HexToAddress("0x1")}
+	l1Tracker := &mockL1Tracker{halt: false}
+	ha := newMockSequencerHA(true)
+	gauge := &recordingGauge{}
+
+	s, err := NewStateV2(newTestMockL2Node(), logger, verifier, l1Tracker, signer, nil, ha)
+	if err != nil {
+		t.Fatalf("NewStateV2: %v", err)
+	}
+	metrics := NopMetrics()
+	metrics.IsActiveSequencer = gauge
+	s.SetMetrics(metrics)
+	s.latestBlock = &BlockV2{Number: 10}
+
+	if !s.isActiveSequencer() {
+		t.Fatal("expected active when HA leader, L1 healthy, and verifier says sequencer")
+	}
+	if gauge.value != 1 {
+		t.Fatalf("active metric = %v, want 1", gauge.value)
+	}
+
+	l1Tracker.halt = true
+	if s.isActiveSequencer() {
+		t.Fatal("expected inactive when L1 tracker halts production")
+	}
+	if gauge.value != 0 {
+		t.Fatalf("active metric after L1 halt = %v, want 0", gauge.value)
+	}
+
+	l1Tracker.halt = false
+	if !s.isActiveSequencer() {
+		t.Fatal("expected active again after L1 recovers")
+	}
+	if gauge.value != 1 {
+		t.Fatalf("active metric after L1 recovery = %v, want 1", gauge.value)
+	}
+
+	ha.leader = false
+	if s.isActiveSequencer() {
+		t.Fatal("expected inactive when HA node is no longer leader")
+	}
+	if gauge.value != 0 {
+		t.Fatalf("active metric after losing HA leadership = %v, want 0", gauge.value)
 	}
 }
 

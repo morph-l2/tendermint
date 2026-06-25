@@ -102,6 +102,7 @@ type BlockBroadcastReactor struct {
 	verifier  SequencerVerifier
 	l1Tracker L1Tracker // required: gates peer-block sync on L1 freshness
 	sigStore  *SignatureStore
+	metrics   *Metrics
 
 	// syncRequests tracks pending sync channel requests, keyed by height.
 	// Used to reject unsolicited responses before decode/verification.
@@ -151,9 +152,18 @@ func NewBlockBroadcastReactor(
 		verifier:        verifier,
 		l1Tracker:       l1Tracker,
 		sigStore:        sigStore,
+		metrics:         NopMetrics(),
 	}
 	r.BaseReactor = *p2p.NewBaseReactor("BlockBroadcast", r)
 	return r
+}
+
+// SetMetrics wires the sequencer metrics. Called once after construction.
+// When unset, metrics default to a no-op implementation.
+func (r *BlockBroadcastReactor) SetMetrics(m *Metrics) {
+	if m != nil {
+		r.metrics = m
+	}
 }
 
 func (r *BlockBroadcastReactor) SetLogger(l log.Logger) {
@@ -222,6 +232,7 @@ func (r *BlockBroadcastReactor) StartSequencerRoutines() error {
 	// Open the Receive() gate: from this point on, incoming P2P messages
 	// will be processed instead of being silently dropped.
 	r.routinesStarted.Store(true)
+	r.metrics.SetBcastRoutinesStarted(true)
 
 	// Fullnode (no signer): only applyRoutine (P2P sync)
 	// Nodes with signer (ActiveSeq / HA-Leader / HA-Follower): only broadcastRoutine
@@ -245,6 +256,7 @@ func (r *BlockBroadcastReactor) OnStop() {
 
 	r.startMu.Lock()
 	r.routinesStarted.Store(false)
+	r.metrics.SetBcastRoutinesStarted(false)
 	r.startMu.Unlock()
 
 	r.bannedPeersMu.Lock()
@@ -318,7 +330,7 @@ func (r *BlockBroadcastReactor) Receive(chID byte, src p2p.Peer, msgBytes []byte
 	msg, err := decodeMsg(msgBytes)
 	if err != nil {
 		r.logger.Error("Error decoding message", "src", src, "chId", chID, "err", err)
-		r.banPeer(src, "invalid message encoding")
+		r.banPeer(src, "decode_error")
 		return
 	}
 
@@ -343,7 +355,7 @@ func (r *BlockBroadcastReactor) handleBroadcastMsg(msg interface{}, src p2p.Peer
 			blockV2, err := types.BlockV2FromProto(msg.Block)
 			if err != nil {
 				r.logger.Error("Invalid BlockV2 from broadcast channel", "peer", src.ID(), "err", err)
-				r.banPeer(src, "invalid BlockV2 in broadcast")
+				r.banPeer(src, "invalid_block")
 				return
 			}
 			localHeight := r.stateV2.LatestHeight()
@@ -359,6 +371,7 @@ func (r *BlockBroadcastReactor) handleBroadcastMsg(msg interface{}, src p2p.Peer
 				return
 			}
 			if r.markSeen(blockV2.Hash) {
+				r.metrics.IncBcastBlocksDeduped()
 				r.logger.Debug("onBlockV2 broadcast dedup", "number", blockV2.Number, "hash", blockV2.Hash.Hex())
 				return
 			}
@@ -395,7 +408,7 @@ func (r *BlockBroadcastReactor) handleSyncMsg(msg interface{}, src p2p.Peer) {
 			blockV2, err := types.BlockV2FromProto(msg.Block)
 			if err != nil {
 				r.logger.Error("Invalid BlockV2 from sync channel", "peer", src.ID(), "err", err)
-				r.banPeer(src, "invalid BlockV2 in sync response")
+				r.banPeer(src, "invalid_block")
 				return
 			}
 			r.onBlockV2(blockV2, src, false) // from sync channel
@@ -438,6 +451,7 @@ func (r *BlockBroadcastReactor) broadcastRoutine() {
 				continue
 			}
 			r.broadcast(block)
+			r.metrics.SetBroadcastChannelDepth(len(source))
 		}
 	}
 }
@@ -491,7 +505,7 @@ func (r *BlockBroadcastReactor) onBlockV2(block *BlockV2, src p2p.Peer, fromBroa
 		if errors.Is(err, ErrInvalidSignature) {
 			r.logger.Error("Block signature invalid, banning peer",
 				"number", block.Number, "hash", block.Hash.Hex(), "err", err)
-			r.banPeer(src, "block signature verification failed")
+			r.banPeer(src, "invalid_sig")
 		} else {
 			// Verifier unavailable — local problem, not peer's fault.
 			r.logger.Error("Verifier unavailable, dropping block without ban",
@@ -506,7 +520,7 @@ func (r *BlockBroadcastReactor) onBlockV2(block *BlockV2, src p2p.Peer, fromBroa
 	localHeight := r.stateV2.LatestHeight()
 
 	if r.isNextBlock(block) {
-		if err := r.applyBlock(block); err != nil {
+		if err := r.applyBlock(block, "p2p"); err != nil {
 			r.logger.Error("Apply failed", "number", block.Number, "hash", block.Hash.Hex(), "err", err)
 			r.pendingCache.Add(block, uint64(localHeight))
 			return
@@ -522,6 +536,7 @@ func (r *BlockBroadcastReactor) onBlockV2(block *BlockV2, src p2p.Peer, fromBroa
 // tryApplyFromCache: apply blocks from unlink cache (called by applyRoutine)
 // Blocks in cache don't need signature verification (already verified or from sync)
 func (r *BlockBroadcastReactor) tryApplyFromCache() {
+	r.metrics.SetBcastPendingCacheSize(r.pendingCache.Size())
 	currentBlock := r.stateV2.LatestBlock()
 	if currentBlock == nil {
 		return
@@ -539,7 +554,7 @@ func (r *BlockBroadcastReactor) tryApplyFromCache() {
 			break
 		}
 		r.logger.Debug("Trying to apply from cache", "number", block.Number, "hash", block.Hash.Hex())
-		if err := r.applyBlock(block); err != nil {
+		if err := r.applyBlock(block, "cache"); err != nil {
 			r.logger.Error("Apply from cache failed", "number", block.Number, "err", err)
 			break
 		}
@@ -563,6 +578,7 @@ func (r *BlockBroadcastReactor) checkSyncGap() {
 	localHeight := r.stateV2.LatestHeight()
 	maxPeerHeight := r.getPool().MaxPeerHeight()
 	gap := maxPeerHeight - localHeight
+	r.metrics.SetBcastSyncGap(gap)
 	r.logger.Debug("Checking sync goroutines", "gap", gap, "localHeight", localHeight, "maxPeerHeight", maxPeerHeight)
 	if gap <= smallGapThreshold &&
 		!r.firstSync.CompareAndSwap(true, false) {
@@ -647,7 +663,9 @@ func (r *BlockBroadcastReactor) isNextBlock(block *BlockV2) bool {
 
 // applyBlock verifies signature, applies the block atomically, and persists the signature.
 // Thread-safe: uses mutex to ensure sequential block application.
-func (r *BlockBroadcastReactor) applyBlock(block *BlockV2) error {
+// source labels where the block came from: "p2p" (direct from a peer) or
+// "cache" (applied later from the pending out-of-order cache).
+func (r *BlockBroadcastReactor) applyBlock(block *BlockV2, source string) error {
 	r.applyMtx.Lock()
 	defer r.applyMtx.Unlock()
 
@@ -664,6 +682,7 @@ func (r *BlockBroadcastReactor) applyBlock(block *BlockV2) error {
 
 	// Add to recent blocks
 	r.recentBlocks.Add(block)
+	r.metrics.IncBcastBlocksApplied(source)
 
 	r.logger.Info("Applied block", "number", block.Number)
 	return nil
@@ -777,7 +796,7 @@ func (r *BlockBroadcastReactor) removeTimeoutPeers() {
 		if peer == nil {
 			continue
 		}
-		r.banPeer(peer, "sync request timed out")
+		r.banPeer(peer, "sync_timeout")
 	}
 }
 
@@ -821,6 +840,10 @@ func (r *BlockBroadcastReactor) removeSyncRequestsByPeer(peerID p2p.ID) {
 // reconnect them, and on reconnect AddPeer's isBanned check will let them in.
 func (r *BlockBroadcastReactor) banPeer(peer p2p.Peer, reason string) {
 	peerID := peer.ID()
+	// reason is a compact, low-cardinality token (e.g. invalid_sig,
+	// invalid_block, decode_error, sync_timeout); detailed context is logged
+	// at each call site just before banning.
+	r.metrics.IncBcastPeersBanned(reason)
 
 	if peer.IsPersistent() {
 		r.logger.Error("[WHITELIST_ALARM] whitelisted peer misbehaved, will reconnect",

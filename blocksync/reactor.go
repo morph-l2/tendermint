@@ -89,6 +89,10 @@ type Reactor struct {
 	// Sequencer signature verification (set after upgrade via SetVerifier/SetSigStore)
 	verifier sequencer.SequencerVerifier
 	sigStore *sequencer.SignatureStore
+
+	// metrics records sequencer blocksync-V2 catch-up stats. Set after upgrade
+	// via SetMetrics; defaults to a no-op implementation.
+	metrics *sequencer.Metrics
 }
 
 // NewReactor returns new reactor instance.
@@ -138,6 +142,7 @@ func NewReactor(
 		blockSync:    blockSync,
 		requestsCh:   requestsCh,
 		errorsCh:     errorsCh,
+		metrics:      sequencer.NopMetrics(),
 	}
 	bcR.BaseReactor = *p2p.NewBaseReactor("Reactor", bcR)
 	return bcR
@@ -162,6 +167,14 @@ func (bcR *Reactor) SetVerifier(v sequencer.SequencerVerifier) {
 // SetSigStore sets the signature store for persisting/attaching block signatures.
 func (bcR *Reactor) SetSigStore(s *sequencer.SignatureStore) {
 	bcR.sigStore = s
+}
+
+// SetMetrics sets the sequencer metrics for blocksync-V2 instrumentation
+// (called after upgrade). When unset, metrics default to a no-op.
+func (bcR *Reactor) SetMetrics(m *sequencer.Metrics) {
+	if m != nil {
+		bcR.metrics = m
+	}
 }
 
 // Pool returns the block pool for broadcast reactor to check peer heights.
@@ -431,6 +444,7 @@ func (bcR *Reactor) syncBlockV2(block types.SyncableBlock, blocksSynced *uint64,
 
 	bcR.pool.PopRequest()
 	*blocksSynced++
+	bcR.metrics.IncSyncV2Blocks()
 
 	if *blocksSynced%100 == 0 {
 		*lastRate = 0.9*(*lastRate) + 0.1*(100/time.Since(*lastHundred).Seconds())
