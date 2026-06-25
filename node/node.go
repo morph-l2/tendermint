@@ -118,20 +118,25 @@ func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
 	)
 }
 
-// MetricsProvider returns a consensus and p2p Metrics.
-type MetricsProvider func(chainID string) (*cs.Metrics, *p2p.Metrics, *sm.Metrics, *proxy.Metrics)
+// MetricsProvider returns consensus, p2p, state, proxy and sequencer Metrics.
+type MetricsProvider func(chainID string) (*cs.Metrics, *p2p.Metrics, *sm.Metrics, *proxy.Metrics, *sequencer.Metrics)
 
 // DefaultMetricsProvider returns Metrics build using Prometheus client library
 // if Prometheus is enabled. Otherwise, it returns no-op Metrics.
+//
+// The sequencer (post-upgrade) metrics use the "morphnode" namespace to align
+// with the morph-node executor/syncer metrics (morphnode_sequencer_*), rather
+// than the "tendermint" namespace used by the PBFT-era consensus/p2p metrics.
 func DefaultMetricsProvider(config *cfg.InstrumentationConfig) MetricsProvider {
-	return func(chainID string) (*cs.Metrics, *p2p.Metrics, *sm.Metrics, *proxy.Metrics) {
+	return func(chainID string) (*cs.Metrics, *p2p.Metrics, *sm.Metrics, *proxy.Metrics, *sequencer.Metrics) {
 		if config.Prometheus {
 			return cs.PrometheusMetrics(config.Namespace, "chain_id", chainID),
 				p2p.PrometheusMetrics(config.Namespace, "chain_id", chainID),
 				sm.PrometheusMetrics(config.Namespace, "chain_id", chainID),
-				proxy.PrometheusMetrics(config.Namespace, "chain_id", chainID)
+				proxy.PrometheusMetrics(config.Namespace, "chain_id", chainID),
+				sequencer.PrometheusMetrics("morphnode", "chain_id", chainID)
 		}
-		return cs.NopMetrics(), p2p.NopMetrics(), sm.NopMetrics(), proxy.NopMetrics()
+		return cs.NopMetrics(), p2p.NopMetrics(), sm.NopMetrics(), proxy.NopMetrics(), sequencer.NopMetrics()
 	}
 }
 
@@ -520,6 +525,7 @@ func createSequencerComponents(
 	signer sequencer.Signer,
 	sigStore *sequencer.SignatureStore,
 	ha sequencer.SequencerHA,
+	metrics *sequencer.Metrics,
 ) (*sequencer.StateV2, *sequencer.BlockBroadcastReactor, error) {
 	// Create StateV2
 	stateV2, err := sequencer.NewStateV2(
@@ -534,6 +540,7 @@ func createSequencerComponents(
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create StateV2: %w", err)
 	}
+	stateV2.SetMetrics(metrics)
 
 	// Create BlockBroadcastReactor (not started yet).
 	// Routines are started later via StartSequencerRoutines() — see OnStart()
@@ -546,6 +553,7 @@ func createSequencerComponents(
 		l1Tracker,
 		sigStore,
 	)
+	broadcastReactor.SetMetrics(metrics)
 	broadcastReactor.SetLogger(logger.With("module", "sequencer"))
 
 	return stateV2, broadcastReactor, nil
@@ -829,7 +837,7 @@ func NewNode(
 		return nil, err
 	}
 
-	csMetrics, p2pMetrics, smMetrics, abciMetrics := metricsProvider(genDoc.ChainID)
+	csMetrics, p2pMetrics, smMetrics, abciMetrics, seqMetrics := metricsProvider(genDoc.ChainID)
 
 	// Create the proxyApp and establish connections to the ABCI app (consensus, query).
 	proxyApp, err := createAndStartProxyAppConns(clientCreator, logger, abciMetrics)
@@ -1044,6 +1052,7 @@ func NewNode(
 			sequencerSigner,
 			sigStore,
 			ha, // HA service injected from NewNode caller; nil disables HA mode
+			seqMetrics,
 		); err != nil {
 			return nil, err
 		}
@@ -1057,6 +1066,7 @@ func NewNode(
 		bcR.SetStateV2(node.stateV2)
 		bcR.SetVerifier(sequencerVerifier)
 		bcR.SetSigStore(sigStore)
+		bcR.SetMetrics(seqMetrics)
 
 		// Register BlockBroadcastReactor with Switch
 		sw.AddReactor("SEQUENCER", node.blockBroadcastReactor)

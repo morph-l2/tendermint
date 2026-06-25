@@ -8,6 +8,7 @@ import (
 	"github.com/tendermint/tendermint/l2node"
 	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/libs/service"
+	"github.com/tendermint/tendermint/types"
 )
 
 const (
@@ -42,6 +43,7 @@ type StateV2 struct {
 	sigStore  *SignatureStore
 	ha        SequencerHA // nil = single-node mode
 	logger    log.Logger
+	metrics   *Metrics
 
 	// Block production
 	blockInterval     time.Duration // empty-block fallback interval (default 3s)
@@ -77,12 +79,21 @@ func NewStateV2(
 		blockInterval:     BlockInterval,
 		fastBlockInterval: FastBlockInterval,
 		logger:            logger.With("module", "stateV2"),
+		metrics:           NopMetrics(),
 		broadcastCh:       make(chan *BlockV2, 100),
 	}
 
 	s.BaseService = *service.NewBaseService(logger, "StateV2", s)
 
 	return s, nil
+}
+
+// SetMetrics wires the sequencer metrics. Called once after construction
+// (before OnStart). When unset, metrics default to a no-op implementation.
+func (s *StateV2) SetMetrics(m *Metrics) {
+	if m != nil {
+		s.metrics = m
+	}
 }
 
 // OnStart implements service.Service.
@@ -200,7 +211,11 @@ func resetTimer(t *time.Timer, d time.Duration) {
 // isActiveSequencer returns true if this node should produce the next block.
 // For HA mode: must be Raft leader AND L1-designated sequencer.
 // For single-node mode: must be L1-designated sequencer.
-func (s *StateV2) isActiveSequencer() bool {
+func (s *StateV2) isActiveSequencer() (active bool) {
+	defer func() {
+		s.metrics.SetActiveSequencer(active)
+	}()
+
 	// HA mode: must be Raft leader
 	if s.ha != nil && !s.ha.IsLeader() {
 		return false
@@ -236,11 +251,13 @@ func (s *StateV2) assembleBlock() (*BlockV2, bool, error) {
 	parentHash := s.latestBlock.Hash
 	s.mtx.RUnlock()
 
+	tAssemble := time.Now()
 	block, collectedL1Msgs, err := s.l2Node.RequestBlockDataV2(parentHash.Bytes())
 	if err != nil {
 		s.logger.Error("Failed to assemble block", "error", err)
 		return nil, false, err
 	}
+	s.metrics.ObserveAssembleDuration(time.Since(tAssemble))
 	return block, collectedL1Msgs, nil
 }
 
@@ -255,6 +272,7 @@ func (s *StateV2) commitBlock(block *BlockV2, collectedL1Msgs bool) {
 		return
 	}
 	signDur := time.Since(tSign)
+	s.metrics.ObserveSignDuration(signDur)
 
 	if s.ha != nil {
 		// HA mode: replicate via Raft. FSM callback handles ApplyBlock + SaveSignature
@@ -266,6 +284,7 @@ func (s *StateV2) commitBlock(block *BlockV2, collectedL1Msgs bool) {
 		}
 		commitDur := time.Since(tCommit)
 		totalDur := time.Since(t0)
+		s.metrics.ObserveCommitDuration("ha", totalDur)
 
 		s.logger.Debug("[PERF] commitBlock",
 			"mode", "HA",
@@ -285,6 +304,7 @@ func (s *StateV2) commitBlock(block *BlockV2, collectedL1Msgs bool) {
 		}
 		applyDur := time.Since(tApply)
 		totalDur := time.Since(t0)
+		s.metrics.ObserveCommitDuration("single", totalDur)
 
 		s.logger.Debug("[PERF] commitBlock",
 			"mode", "single",
@@ -304,9 +324,11 @@ func (s *StateV2) commitBlock(block *BlockV2, collectedL1Msgs bool) {
 				"txCount", len(block.Transactions),
 				"collectedL1Msgs", collectedL1Msgs)
 		default:
+			s.metrics.IncBroadcastChannelDropped()
 			s.logger.Error("Broadcast channel full, dropping block", "number", block.Number)
 		}
 	}
+	s.metrics.IncBlocksProduced()
 }
 
 // signBlock signs the block hash with the signer.
@@ -343,6 +365,7 @@ func (s *StateV2) ApplyBlock(block *BlockV2) error {
 		return err
 	}
 	sigDur := time.Since(tSig)
+	s.metrics.ObserveApplyDuration("sig", sigDur)
 
 	tGeth := time.Now()
 	applied, err := s.l2Node.ApplyBlockV2(block)
@@ -350,8 +373,18 @@ func (s *StateV2) ApplyBlock(block *BlockV2) error {
 		return err
 	}
 	gethDur := time.Since(tGeth)
+	s.metrics.ObserveApplyDuration("geth", gethDur)
 
 	if applied {
+		// Block attributes are recorded on every node that applies a block
+		// (leader, HA follower, fullnode), so these are role-independent.
+		// Interval uses block timestamps (not wall-clock) to stay accurate
+		// even while catching up.
+		if s.latestBlock != nil && block.Timestamp >= s.latestBlock.Timestamp {
+			s.metrics.ObserveBlockIntervalSeconds(block.Timestamp - s.latestBlock.Timestamp)
+		}
+		s.metrics.ObserveBlockSizeBytes(types.BlockV2ToProto(block).Size())
+		s.metrics.ObserveBlockTxs(len(block.Transactions))
 		s.latestBlock = block
 	}
 

@@ -20,6 +20,7 @@ func newReactorForTest() *BlockBroadcastReactor {
 		syncPeerCounts:  make(map[p2p.ID]int),
 		bannedPeers:     make(map[p2p.ID]time.Time),
 		blockReqLimiter: NewPeerRateLimiter(blockRequestRateLimit, blockRequestBurst),
+		metrics:         NopMetrics(),
 	}
 }
 
