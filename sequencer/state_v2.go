@@ -11,13 +11,34 @@ import (
 	"github.com/tendermint/tendermint/types"
 )
 
-const (
-	// BlockInterval is the fallback interval for empty blocks (no txs).
-	BlockInterval = 5000 * time.Millisecond
-	// FastBlockInterval is the txpool polling interval.
-	// When pending txs are found, a block is produced immediately.
-	FastBlockInterval = 300 * time.Millisecond
+// BlockInterval and FastBlockInterval are the effective block-production
+// intervals read by NewStateV2. This package carries no default: the owning
+// binary must call SetBlockIntervals before starting a node with a signer.
+// roleCheckRoutine builds a time.Ticker from FastBlockInterval, which panics on
+// a non-positive value, so leaving these unset (zero) is a programming error on
+// a signer node. The morph node sets them from its --sequencerBlockInterval /
+// --sequencerFastBlockInterval flags (which own the defaults).
+var (
+	BlockInterval     time.Duration
+	FastBlockInterval time.Duration
 )
+
+// SetBlockIntervals sets the sequencer block-production intervals. It must be
+// called before NewStateV2 on any node with a signer. Both values must be
+// positive and the fast (txpool poll) interval must be strictly smaller than
+// the empty-block fallback interval; otherwise the previous values are left
+// untouched and an error is returned so a bad configuration fails fast.
+func SetBlockIntervals(blockInterval, fastBlockInterval time.Duration) error {
+	if blockInterval <= 0 || fastBlockInterval <= 0 {
+		return fmt.Errorf("block intervals must be positive: blockInterval=%s fastBlockInterval=%s", blockInterval, fastBlockInterval)
+	}
+	if fastBlockInterval >= blockInterval {
+		return fmt.Errorf("fastBlockInterval (%s) must be less than blockInterval (%s)", fastBlockInterval, blockInterval)
+	}
+	BlockInterval = blockInterval
+	FastBlockInterval = fastBlockInterval
+	return nil
+}
 
 // StateV2 manages the state for centralized sequencer mode.
 // It replaces the PBFT consensus state after the upgrade.
@@ -46,7 +67,7 @@ type StateV2 struct {
 	metrics   *Metrics
 
 	// Block production
-	blockInterval     time.Duration // empty-block fallback interval (default 3s)
+	blockInterval     time.Duration // empty-block fallback interval (default 2s)
 	fastBlockInterval time.Duration // txpool polling interval (default 300ms)
 
 	// Broadcast channel - non-HA self-produced blocks are sent here
