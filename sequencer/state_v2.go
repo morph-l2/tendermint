@@ -297,8 +297,13 @@ func (s *StateV2) isActiveSequencer() (active bool) {
 }
 
 // assembleBlock calls geth Engine API to build a candidate block from the current
-// txpool and pending L1 messages. This is a read-only operation with no side
-// effects — the result can be safely discarded if the block has no work.
+// txpool and pending L1 messages. The candidate carries no commitment: it can be
+// discarded if it turns out to hold no work.
+//
+// It is NOT side-effect free. When the execution layer has lost the head we build
+// on, assembling repairs it — backfilling the missing blocks and then assembling
+// again — so the caller gets a block in the same round instead of having to retry.
+// Do not call this from a path that must leave the execution layer untouched.
 func (s *StateV2) assembleBlock() (*BlockV2, bool, error) {
 	s.mtx.RLock()
 	parentHash := s.latestBlock.Hash
@@ -307,18 +312,22 @@ func (s *StateV2) assembleBlock() (*BlockV2, bool, error) {
 	tAssemble := time.Now()
 	block, collectedL1Msgs, err := s.l2Node.RequestBlockDataV2(parentHash.Bytes())
 	if err != nil {
-		s.logger.Error("Failed to assemble block", "error", err)
 		if strings.Contains(err.Error(), parentNotFoundError) {
-			// The EL came back without the head we produced, so there is nothing
-			// to build on. Repair it here and let the next production tick
-			// assemble again; this round is abandoned either way.
 			if rErr := s.backfillMissingBlocks(parentHash); rErr != nil {
 				s.logger.Error("Backfill failed", "parentHash", parentHash.Hex(), "err", rErr)
 				return nil, false, rErr
 			}
+			block, collectedL1Msgs, err = s.l2Node.RequestBlockDataV2(parentHash.Bytes())
 		}
+	}
+	if err != nil {
+		s.logger.Error("Failed to assemble block", "error", err)
 		return nil, false, err
 	}
+	// Measured from the first attempt, so a round that had to backfill reports the
+	// whole recovery (failed assemble + the re-pushed blocks + the retry) as its
+	// assemble duration. That is the real time to get a block, but it does show up
+	// as an outlier when reading this metric as "how slow is geth at assembling".
 	assembleDur := time.Since(tAssemble)
 	s.metrics.ObserveAssembleDuration(assembleDur)
 	s.logger.Debug("[PERF] assembleBlock",
