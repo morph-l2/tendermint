@@ -2,9 +2,11 @@ package sequencer
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/morph-l2/go-ethereum/common"
 	"github.com/tendermint/tendermint/l2node"
 	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/libs/service"
@@ -40,6 +42,26 @@ func SetBlockIntervals(blockInterval, fastBlockInterval time.Duration) error {
 	return nil
 }
 
+const (
+	// backfillMaxDepth bounds how many missing ancestors a single parent-not-found
+	// will backfill into the execution layer. reth buffers only a couple of
+	// unpersisted blocks by default, so this leaves ample margin while keeping a
+	// genuinely broken EL from turning into a long silent catch-up.
+	backfillMaxDepth = 16
+
+	// backfillCacheCapacity is how many recently applied blocks are retained so they
+	// can be re-pushed after the EL loses its unpersisted head. Kept above
+	// backfillMaxDepth so the oldest ancestor a backfill may need is still present.
+	backfillCacheCapacity = 64
+
+	// parentNotFoundError is the error text geth returns when a parent hash is
+	// absent from its chain (see go-ethereum/eth/catalyst/l2_api.go,
+	// AssembleL2BlockV2 and NewL2BlockV2). This module cannot import
+	// morph-l2/node/types without an import cycle, so the string is duplicated
+	// here — keep it in sync with types.ParentNotFoundError there.
+	parentNotFoundError = "parent block not found"
+)
+
 // StateV2 manages the state for centralized sequencer mode.
 // It replaces the PBFT consensus state after the upgrade.
 //
@@ -72,6 +94,15 @@ type StateV2 struct {
 
 	// Broadcast channel - non-HA self-produced blocks are sent here
 	broadcastCh chan *BlockV2
+
+	// backfillCache holds recently applied blocks so they can be re-pushed when the
+	// execution layer comes back having lost its unpersisted head. It is fed from
+	// ApplyBlock, the one funnel every role goes through, so unlike the reactor's
+	// broadcast-fed cache it cannot develop holes when a channel overflows.
+	//
+	// The buffer carries its own lock, so backfillMissingBlocks reads it without
+	// holding mtx.
+	backfillCache *BlockRingBuffer
 }
 
 // NewStateV2 creates a new StateV2 instance.
@@ -102,6 +133,7 @@ func NewStateV2(
 		logger:            logger.With("module", "stateV2"),
 		metrics:           NopMetrics(),
 		broadcastCh:       make(chan *BlockV2, 100),
+		backfillCache:     NewBlockRingBuffer(backfillCacheCapacity),
 	}
 
 	s.BaseService = *service.NewBaseService(logger, "StateV2", s)
@@ -276,9 +308,26 @@ func (s *StateV2) assembleBlock() (*BlockV2, bool, error) {
 	block, collectedL1Msgs, err := s.l2Node.RequestBlockDataV2(parentHash.Bytes())
 	if err != nil {
 		s.logger.Error("Failed to assemble block", "error", err)
+		if strings.Contains(err.Error(), parentNotFoundError) {
+			// The EL came back without the head we produced, so there is nothing
+			// to build on. Repair it here and let the next production tick
+			// assemble again; this round is abandoned either way.
+			if rErr := s.backfillMissingBlocks(parentHash); rErr != nil {
+				s.logger.Error("Backfill failed", "parentHash", parentHash.Hex(), "err", rErr)
+				return nil, false, rErr
+			}
+		}
 		return nil, false, err
 	}
-	s.metrics.ObserveAssembleDuration(time.Since(tAssemble))
+	assembleDur := time.Since(tAssemble)
+	s.metrics.ObserveAssembleDuration(assembleDur)
+	s.logger.Debug("[PERF] assembleBlock",
+		"height", block.Number,
+		"hash", block.Hash.Hex(),
+		"txCount", len(block.Transactions),
+		"collectedL1Msgs", collectedL1Msgs,
+		"duration_ms", float64(assembleDur.Microseconds())/1000.0,
+	)
 	return block, collectedL1Msgs, nil
 }
 
@@ -366,6 +415,78 @@ func (s *StateV2) signBlock(block *BlockV2) error {
 	return nil
 }
 
+// backfillMissingBlocks re-pushes the block identified by hash, plus any of its
+// ancestors the execution layer is also missing, so the caller can retry the
+// operation that hit parent-not-found.
+//
+// It takes no lock: backfillCache and the executor are each independently
+// synchronised, and no StateV2 field is read or written here.
+//
+// The EL's head is read first so the gap is known exactly — only blocks above
+// that head are pushed, and the walk must link to it by hash. That turns both
+// failure modes into an explicit refusal instead of something discovered from a
+// rejected apply:
+//
+//   - The cache no longer covers the gap: a cold cache, or a gap wider than
+//     backfillMaxDepth. Nothing is applied and the caller keeps its own error.
+//   - The cached chain does not descend from the EL's head, so the EL is on a
+//     competing branch rather than merely behind. Pushing our blocks would be
+//     *accepted* there (the competing block's parent is present, so
+//     NewL2BlockV2 validates and WriteStateAndSetHead reorgs), silently moving
+//     the EL onto our history. Reorg handling is out of scope for a gap filler,
+//     so refuse and leave the EL as it is for an operator to inspect.
+//
+// Blocks are applied oldest-first because NewL2BlockV2 rejects a block whose
+// parent it does not hold.
+func (s *StateV2) backfillMissingBlocks(hash common.Hash) error {
+	head, err := s.l2Node.GetLatestBlockV2()
+	if err != nil {
+		return fmt.Errorf("read execution layer head: %w", err)
+	}
+
+	var missing []*BlockV2
+	for h := hash; ; {
+		b := s.backfillCache.GetByHash(h)
+		if b == nil {
+			return fmt.Errorf("block %s not in cache, execution layer head is %d (%s)",
+				h.Hex(), head.Number, head.Hash.Hex())
+		}
+		if b.Number <= head.Number {
+			return fmt.Errorf("execution layer is on a competing branch: "+
+				"cached block %d (%s) is not above head %d (%s) and does not link to it",
+				b.Number, b.Hash.Hex(), head.Number, head.Hash.Hex())
+		}
+		missing = append(missing, b)
+		if b.ParentHash == head.Hash {
+			break
+		}
+		if len(missing) >= backfillMaxDepth {
+			return fmt.Errorf("gap exceeds backfillMaxDepth: head %d up to block %d, limit %d",
+				head.Number, missing[0].Number, backfillMaxDepth)
+		}
+		h = b.ParentHash
+	}
+
+	// Unreachable today: the loop's only break happens after an append, and every
+	// other exit returns. Guarded anyway because the reporting below indexes
+	// missing, and a panic here would take down block production.
+	if len(missing) == 0 {
+		return fmt.Errorf("nothing to backfill for %s", hash.Hex())
+	}
+
+	for i := len(missing) - 1; i >= 0; i-- {
+		b := missing[i]
+		if _, err := s.l2Node.ApplyBlockV2(b); err != nil {
+			return fmt.Errorf("backfill block %d: %w", b.Number, err)
+		}
+	}
+	s.logger.Info("Backfilled blocks into execution layer",
+		"count", len(missing),
+		"from", missing[len(missing)-1].Number,
+		"to", missing[0].Number)
+	return nil
+}
+
 // ApplyBlock saves the block signature and delegates to l2Node.ApplyBlockV2.
 // Reorg detection and idempotent checks are handled in the Executor layer.
 func (s *StateV2) ApplyBlock(block *BlockV2) error {
@@ -390,6 +511,16 @@ func (s *StateV2) ApplyBlock(block *BlockV2) error {
 
 	tGeth := time.Now()
 	applied, err := s.l2Node.ApplyBlockV2(block)
+	if err != nil && strings.Contains(err.Error(), parentNotFoundError) {
+		// The EL restarted without persisting its head, so this block no longer
+		// connects. Re-push the missing ancestors and retry once. Any failure
+		// returns the original error, leaving behaviour identical to before.
+		if rErr := s.backfillMissingBlocks(block.ParentHash); rErr != nil {
+			s.logger.Error("Backfill failed", "number", block.Number, "err", rErr)
+			return err
+		}
+		applied, err = s.l2Node.ApplyBlockV2(block)
+	}
 	if err != nil {
 		return err
 	}
@@ -407,6 +538,7 @@ func (s *StateV2) ApplyBlock(block *BlockV2) error {
 		s.metrics.ObserveBlockSizeBytes(types.BlockV2ToProto(block).Size())
 		s.metrics.ObserveBlockTxs(len(block.Transactions))
 		s.latestBlock = block
+		s.backfillCache.Add(block)
 	}
 
 	s.logger.Debug("[PERF] ApplyBlock",
