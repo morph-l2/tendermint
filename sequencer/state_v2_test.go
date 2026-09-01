@@ -74,6 +74,7 @@ func (m *mockSequencerHA) Join() error                               { return ni
 func (m *mockSequencerHA) Commit(block *BlockV2) error               { return m.commitErr }
 func (m *mockSequencerHA) Subscribe() <-chan *BlockV2                { return m.subCh }
 func (m *mockSequencerHA) SetOnBlockApplied(fn func(*BlockV2) error) {}
+func (m *mockSequencerHA) TransferLeader() error                     { return nil }
 
 // newTestMockL2Node creates a mock L2Node for testing.
 func newTestMockL2Node() l2node.L2Node {

@@ -202,7 +202,7 @@ func (s *StateV2) OnReset() error {
 //
 // Two timers drive block production:
 //   - fastTicker (300ms): polls txpool via assembleBlock; produces immediately when txs found.
-//   - slowTimer (3s): forces a block (even empty) to maintain chain liveness.
+//   - slowTimer (2s): forces a block (even empty) to maintain chain liveness.
 //
 // When fastTicker produces a block, slowTimer is reset to avoid redundant empty blocks.
 func (s *StateV2) roleCheckRoutine() {
@@ -222,29 +222,47 @@ func (s *StateV2) roleCheckRoutine() {
 			return
 
 		case <-fastTicker.C:
-			if !s.isActiveSequencer() {
-				continue
+			if s.produceBlock(true) {
+				resetTimer(slowTimer, s.blockInterval)
 			}
-			block, collectedL1Msgs, err := s.assembleBlock()
-			if err != nil {
-				continue
-			}
-			if len(block.Transactions) == 0 && !collectedL1Msgs {
-				continue // empty block, discard and wait for next tick
-			}
-			s.commitBlock(block, collectedL1Msgs)
-			resetTimer(slowTimer, s.blockInterval)
-
 		case <-slowTimer.C:
-			if s.isActiveSequencer() {
-				block, collectedL1Msgs, err := s.assembleBlock()
-				if err == nil {
-					s.commitBlock(block, collectedL1Msgs)
-				}
-			}
-			slowTimer.Reset(s.blockInterval)
+			s.produceBlock(false)
+			resetTimer(slowTimer, s.blockInterval)
 		}
 	}
+}
+
+func (s *StateV2) produceBlock(skipEmptyBlock bool) bool {
+	if !s.isActiveSequencer() {
+		return false
+	}
+	block, collectedL1Msgs, err := s.assembleBlock()
+	if err != nil {
+		_ = s.transferLeader()
+		return false
+	}
+	if skipEmptyBlock && len(block.Transactions) == 0 && !collectedL1Msgs {
+		return false // empty block, discard and wait for next tick
+	}
+	err = s.commitBlock(block, collectedL1Msgs)
+	if err != nil {
+		_ = s.transferLeader()
+		return false
+	}
+	return true
+}
+
+func (s *StateV2) transferLeader() error {
+	if s.ha == nil {
+		return nil
+	}
+	err := s.ha.TransferLeader()
+	if err != nil {
+		s.logger.Error("Failed to transfer leader", "err", err)
+		return err
+	}
+	s.logger.Info("raft: Transfer leader succeeded")
+	return nil
 }
 
 // resetTimer safely stops, drains, and resets a timer.
@@ -342,13 +360,13 @@ func (s *StateV2) assembleBlock() (*BlockV2, bool, error) {
 
 // commitBlock signs the assembled block and either commits via Raft (HA mode)
 // or applies locally and sends to broadcastCh (single-node mode).
-func (s *StateV2) commitBlock(block *BlockV2, collectedL1Msgs bool) {
+func (s *StateV2) commitBlock(block *BlockV2, collectedL1Msgs bool) error {
 	t0 := time.Now()
 
 	tSign := time.Now()
 	if err := s.signBlock(block); err != nil {
 		s.logger.Error("Failed to sign block", "error", err)
-		return
+		return err
 	}
 	signDur := time.Since(tSign)
 	s.metrics.ObserveSignDuration(signDur)
@@ -359,7 +377,7 @@ func (s *StateV2) commitBlock(block *BlockV2, collectedL1Msgs bool) {
 		tCommit := time.Now()
 		if err := s.ha.Commit(block); err != nil {
 			s.logger.Error("Failed to commit block via HA", "number", block.Number, "err", err)
-			return
+			return err
 		}
 		commitDur := time.Since(tCommit)
 		totalDur := time.Since(t0)
@@ -379,7 +397,7 @@ func (s *StateV2) commitBlock(block *BlockV2, collectedL1Msgs bool) {
 		tApply := time.Now()
 		if err := s.ApplyBlock(block); err != nil {
 			s.logger.Error("Failed to apply block", "error", err)
-			return
+			return err
 		}
 		applyDur := time.Since(tApply)
 		totalDur := time.Since(t0)
@@ -408,6 +426,7 @@ func (s *StateV2) commitBlock(block *BlockV2, collectedL1Msgs bool) {
 		}
 	}
 	s.metrics.IncBlocksProduced()
+	return nil
 }
 
 // signBlock signs the block hash with the signer.
