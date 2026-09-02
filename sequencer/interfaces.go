@@ -72,6 +72,8 @@ type SequencerHA interface {
 	// committed log entry. The callback should execute ApplyBlock + SaveSignature.
 	// Must be called before Start().
 	SetOnBlockApplied(fn func(*BlockV2) error)
+
+	TransferLeader() error
 }
 
 // L1Tracker reports whether L1 RPC has fallen too far behind for this node to
