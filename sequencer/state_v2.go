@@ -159,6 +159,7 @@ func (s *StateV2) OnStart() error {
 
 	s.mtx.Lock()
 	s.latestBlock = latestBlock
+	s.backfillCache.Clear()
 	s.mtx.Unlock()
 
 	// Use local variable to avoid accessing s.latestBlock without lock in log statement.
@@ -191,19 +192,9 @@ func (s *StateV2) OnStop() {
 	if s.ha != nil {
 		s.ha.Stop()
 	}
-
-	// Drop the backfill cache. OnStart re-seeds latestBlock from the execution
-	// layer, which may come back on a different head than the one we stopped on
-	// (reorg reset, or a restart that rolled the head back). Cached blocks would
-	// then be off-chain, and backfilling them would push that dead branch into
-	// the execution layer. Starting empty costs at most one missed recovery.
-	s.backfillCache.Clear()
 }
 
 func (s *StateV2) OnReset() error {
-	// Same reasoning as OnStop: a reset means the head may have moved, so nothing
-	// cached before it can be trusted as an ancestor of the new head.
-	s.backfillCache.Clear()
 	return nil
 }
 

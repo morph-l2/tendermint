@@ -2,6 +2,7 @@ package sequencer
 
 import (
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/go-kit/kit/metrics"
@@ -491,5 +492,115 @@ func TestIsActiveSequencer_L1TrackerHaltsProduction(t *testing.T) {
 	s2.latestBlock = &BlockV2{Number: 10}
 	if s2.isActiveSequencer() {
 		t.Fatal("expected NOT active when L1 tracker halts production")
+	}
+}
+
+// ============================================================================
+// Backfill cache lifecycle
+// ============================================================================
+
+// gatedL2Node lets a test park an ApplyBlockV2 call inside StateV2.ApplyBlock,
+// so a stop/reset can be driven while an apply is still in flight. Calls made
+// while no gate is armed pass straight through to the wrapped mock.
+type gatedL2Node struct {
+	l2node.L2Node
+
+	mtx     sync.Mutex
+	entered chan struct{}
+	release chan struct{}
+}
+
+func newGatedL2Node() *gatedL2Node {
+	return &gatedL2Node{L2Node: newTestMockL2Node()}
+}
+
+// gate arms the node: the next ApplyBlockV2 signals entered and then blocks
+// until release is closed.
+func (g *gatedL2Node) gate(entered, release chan struct{}) {
+	g.mtx.Lock()
+	defer g.mtx.Unlock()
+	g.entered, g.release = entered, release
+}
+
+func (g *gatedL2Node) ApplyBlockV2(block *BlockV2) (bool, error) {
+	g.mtx.Lock()
+	entered, release := g.entered, g.release
+	g.entered, g.release = nil, nil
+	g.mtx.Unlock()
+
+	if release != nil {
+		close(entered)
+		<-release
+	}
+	return g.L2Node.ApplyBlockV2(block)
+}
+
+func cachedTestBlock(number uint64, parent common.Hash) *BlockV2 {
+	return &types.BlockV2{
+		Number:     number,
+		Hash:       common.Hash{byte(number)},
+		ParentHash: parent,
+		Signature:  []byte{0x01},
+	}
+}
+
+// An apply that outlives a stop/reset must not leave anything behind for the
+// next lifecycle: OnStart re-seeds latestBlock from the execution layer, which
+// may come back on a different head, so a block cached before the transition
+// could be off-chain and backfilling it would push a dead branch into the EL.
+//
+// The stop/reset happens under a derivation reorg (StopReactorsBeforeReorg ->
+// deriveForce -> StartReactorsAfterReorg), which does not wait for an in-flight
+// apply, so the late Add is reachable in production.
+func TestStateV2_OnStart_DropsBlocksCachedAcrossRestart(t *testing.T) {
+	l2 := newGatedL2Node()
+	s, err := NewStateV2(l2, log.NewNopLogger(), &mockSequencerVerifier{}, &mockL1Tracker{}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("NewStateV2: %v", err)
+	}
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	b1 := cachedTestBlock(1, common.Hash{})
+	b2 := cachedTestBlock(2, b1.Hash)
+	for _, b := range []*BlockV2{b1, b2} {
+		if err := s.ApplyBlock(b); err != nil {
+			t.Fatalf("ApplyBlock(%d): %v", b.Number, err)
+		}
+	}
+	if got := s.backfillCache.Count(); got != 2 {
+		t.Fatalf("cached blocks before restart = %d, want 2", got)
+	}
+
+	// Park the apply of b3 inside the execution-layer call.
+	entered, release := make(chan struct{}), make(chan struct{})
+	l2.gate(entered, release)
+	b3 := cachedTestBlock(3, b2.Hash)
+	applyErr := make(chan error, 1)
+	go func() { applyErr <- s.ApplyBlock(b3) }()
+	<-entered
+
+	// Stop and reset while that apply is still stuck in the EL.
+	if err := s.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := s.Reset(); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	close(release)
+	if err := <-applyErr; err != nil {
+		t.Fatalf("in-flight ApplyBlock: %v", err)
+	}
+
+	if err := s.Start(); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if got := s.backfillCache.Count(); got != 0 {
+		t.Errorf("cached blocks after restart = %d, want 0", got)
+	}
+	if s.backfillCache.GetByHash(b3.Hash) != nil {
+		t.Error("block cached by an apply that outlived the stop/reset is still reachable after restart")
 	}
 }
