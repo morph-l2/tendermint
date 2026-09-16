@@ -1,7 +1,10 @@
 package sequencer
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -602,5 +605,86 @@ func TestStateV2_OnStart_DropsBlocksCachedAcrossRestart(t *testing.T) {
 	}
 	if s.backfillCache.GetByHash(b3.Hash) != nil {
 		t.Error("block cached by an apply that outlived the stop/reset is still reachable after restart")
+	}
+}
+
+// ============================================================================
+// Backfill depth
+// ============================================================================
+
+// headL2Node pins the execution-layer head. The shared mock hardcodes head 0,
+// which cannot express "the EL lost its unpersisted blocks and came back behind".
+type headL2Node struct {
+	l2node.L2Node
+	head *BlockV2
+}
+
+func (h *headL2Node) GetLatestBlockV2() (*BlockV2, error) { return h.head, nil }
+
+// cacheGap fills the backfill cache with depth contiguous blocks directly above
+// head and returns the hash of the newest one — the block an apply would have
+// been looking for when its parent was reported missing.
+func cacheGap(t *testing.T, s *StateV2, head *BlockV2, depth int) common.Hash {
+	t.Helper()
+	parent := head.Hash
+	for i := 1; i <= depth; i++ {
+		b := cachedTestBlock(head.Number+uint64(i), parent)
+		if !s.backfillCache.Add(b) {
+			t.Fatalf("cache add block %d", b.Number)
+		}
+		parent = b.Hash
+	}
+	return parent
+}
+
+// backfillMaxDepth has to cover how far the EL's canonical head can regress
+// after a crash. That ceiling is upstream reth configuration rather than a
+// fixed quantity — persistence_backpressure_threshold + memory_block_buffer_target
+// is 16 on reth v2.4.0 and 21 on reth v2.5.2 — so the boundary is pinned here
+// instead of being left to the constant's comment. A depth short of it refuses
+// the gap outright, which is indistinguishable from a node that simply stopped
+// catching up.
+func TestStateV2_Backfill_DepthBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		depth   int
+		wantErr string
+	}{
+		{"reth v2.5.2 default ceiling", 21, ""},
+		{"exactly backfillMaxDepth", backfillMaxDepth, ""},
+		{"one past backfillMaxDepth", backfillMaxDepth + 1, "gap exceeds backfillMaxDepth"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			head := cachedTestBlock(100, common.Hash{})
+			l2 := &headL2Node{L2Node: newTestMockL2Node(), head: head}
+			var logs bytes.Buffer
+			s, err := NewStateV2(l2, log.NewTMLogger(&logs), &mockSequencerVerifier{}, &mockL1Tracker{}, nil, nil, nil)
+			if err != nil {
+				t.Fatalf("NewStateV2: %v", err)
+			}
+
+			tip := cacheGap(t, s, head, tc.depth)
+
+			switch err = s.backfillMissingBlocks(tip); {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("depth %d: backfill refused, want success: %v", tc.depth, err)
+			case tc.wantErr != "" && err == nil:
+				t.Fatalf("depth %d: backfill succeeded, want refusal", tc.depth)
+			case tc.wantErr != "" && !strings.Contains(err.Error(), tc.wantErr):
+				t.Fatalf("depth %d: err = %v, want it to mention %q", tc.depth, err, tc.wantErr)
+			}
+
+			if tc.wantErr != "" {
+				for _, want := range []string{
+					fmt.Sprintf("oldestMissing=%d", head.Number+1),
+					fmt.Sprintf("newestMissing=%d", head.Number+uint64(tc.depth)),
+					fmt.Sprintf("gap=%d", tc.depth),
+				} {
+					if !strings.Contains(logs.String(), want) {
+						t.Errorf("refusal log = %q, want field %q", logs.String(), want)
+					}
+				}
+			}
+		})
 	}
 }

@@ -44,14 +44,33 @@ func SetBlockIntervals(blockInterval, fastBlockInterval time.Duration) error {
 
 const (
 	// backfillMaxDepth bounds how many missing ancestors a single parent-not-found
-	// will backfill into the execution layer. reth buffers only a couple of
-	// unpersisted blocks by default, so this leaves ample margin while keeping a
-	// genuinely broken EL from turning into a long silent catch-up.
-	backfillMaxDepth = 16
+	// will backfill into the execution layer.
+	//
+	// It has to cover how far the EL's canonical head can regress after a crash,
+	// which is upstream reth configuration rather than a fixed quantity: the
+	// ceiling is persistence_backpressure_threshold + memory_block_buffer_target,
+	// i.e. 16 on reth v2.4.0 (16 + 0) and 21 on reth v2.5.2 (16 + 5) with default
+	// settings. 32 covers the v2.5.2 default with margin.
+	//
+	// When changing this or the EL's persistence configuration, keep:
+	//
+	//	EL persistence_backpressure_threshold + memory_block_buffer_target <= backfillMaxDepth <= backfillCacheCapacity
+	//
+	// Violating the left bound refuses a crash-induced gap outright; violating the
+	// right one leaves the cache unable to supply the oldest ancestor the walk
+	// needs. Either way nothing is applied, so a deployment-specific EL tuning that
+	// raises the threshold above this value disables crash recovery entirely — the
+	// refusal is logged explicitly so that reads as a misconfiguration rather than
+	// a node that mysteriously stopped catching up.
+	//
+	// A graceful EL shutdown persists up to the head, so the gap is 0 on SIGTERM
+	// and only non-zero after a crash.
+	backfillMaxDepth = 32
 
 	// backfillCacheCapacity is how many recently applied blocks are retained so they
 	// can be re-pushed after the EL loses its unpersisted head. Kept above
-	// backfillMaxDepth so the oldest ancestor a backfill may need is still present.
+	// backfillMaxDepth so the oldest ancestor a backfill may need is still present;
+	// see the invariant on backfillMaxDepth.
 	backfillCacheCapacity = 64
 
 	// parentNotFoundError is the error text geth returns when a parent hash is
@@ -490,6 +509,17 @@ func (s *StateV2) backfillMissingBlocks(hash common.Hash) error {
 			break
 		}
 		if len(missing) >= backfillMaxDepth {
+			// Logged rather than left to the callers' generic "Backfill failed":
+			// this is a configuration mismatch, not a transient failure, and
+			// retrying cannot clear it. The actionable part is the EL's
+			// persistence threshold relative to backfillMaxDepth.
+			s.logger.Error("Backfill refused: gap exceeds backfillMaxDepth",
+				"head", head.Number,
+				"oldestMissing", head.Number+1,
+				"newestMissing", missing[0].Number,
+				"gap", missing[0].Number-head.Number,
+				"backfillMaxDepth", backfillMaxDepth,
+				"backfillCacheCapacity", backfillCacheCapacity)
 			return fmt.Errorf("gap exceeds backfillMaxDepth: head %d up to block %d, limit %d",
 				head.Number, missing[0].Number, backfillMaxDepth)
 		}
