@@ -1,7 +1,9 @@
 package sequencer
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -655,7 +657,8 @@ func TestStateV2_Backfill_DepthBoundary(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			head := cachedTestBlock(100, common.Hash{})
 			l2 := &headL2Node{L2Node: newTestMockL2Node(), head: head}
-			s, err := NewStateV2(l2, log.NewNopLogger(), &mockSequencerVerifier{}, &mockL1Tracker{}, nil, nil, nil)
+			var logs bytes.Buffer
+			s, err := NewStateV2(l2, log.NewTMLogger(&logs), &mockSequencerVerifier{}, &mockL1Tracker{}, nil, nil, nil)
 			if err != nil {
 				t.Fatalf("NewStateV2: %v", err)
 			}
@@ -669,6 +672,18 @@ func TestStateV2_Backfill_DepthBoundary(t *testing.T) {
 				t.Fatalf("depth %d: backfill succeeded, want refusal", tc.depth)
 			case tc.wantErr != "" && !strings.Contains(err.Error(), tc.wantErr):
 				t.Fatalf("depth %d: err = %v, want it to mention %q", tc.depth, err, tc.wantErr)
+			}
+
+			if tc.wantErr != "" {
+				for _, want := range []string{
+					fmt.Sprintf("oldestMissing=%d", head.Number+1),
+					fmt.Sprintf("newestMissing=%d", head.Number+uint64(tc.depth)),
+					fmt.Sprintf("gap=%d", tc.depth),
+				} {
+					if !strings.Contains(logs.String(), want) {
+						t.Errorf("refusal log = %q, want field %q", logs.String(), want)
+					}
+				}
 			}
 		})
 	}

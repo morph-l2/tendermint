@@ -54,7 +54,7 @@ const (
 	//
 	// When changing this or the EL's persistence configuration, keep:
 	//
-	//	EL persistence_backpressure_threshold <= backfillMaxDepth <= backfillCacheCapacity
+	//	EL persistence_backpressure_threshold + memory_block_buffer_target <= backfillMaxDepth <= backfillCacheCapacity
 	//
 	// Violating the left bound refuses a crash-induced gap outright; violating the
 	// right one leaves the cache unable to supply the oldest ancestor the walk
@@ -515,7 +515,8 @@ func (s *StateV2) backfillMissingBlocks(hash common.Hash) error {
 			// persistence threshold relative to backfillMaxDepth.
 			s.logger.Error("Backfill refused: gap exceeds backfillMaxDepth",
 				"head", head.Number,
-				"oldestMissing", missing[0].Number,
+				"oldestMissing", head.Number+1,
+				"newestMissing", missing[0].Number,
 				"gap", missing[0].Number-head.Number,
 				"backfillMaxDepth", backfillMaxDepth,
 				"backfillCacheCapacity", backfillCacheCapacity)

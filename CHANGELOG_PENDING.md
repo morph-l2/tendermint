@@ -50,7 +50,8 @@ Friendly reminder, we have a [bug bounty program](https://hackerone.com/tendermi
 
 ### BUG FIXES
 
+- [blocksync] \#9518 handle the case when the sending queue is full: retry block request after a timeout
 - [consensus] \#9229 fix round number of `enterPropose` when handling `RoundStepNewRound` timeout. (@fatcat22)
 - [docker] \#9073 enable cross platform build using docker buildx
 - [docker] \#9462 ensure Docker image uses consistent version of Go
-- [blocksync] \#9518 handle the case when the sending queue is full: retry block request after a timeout
+- [sequencer] \#45 Restore crash recovery when reth v2.5.2 loses its default in-memory block window. (@panos-xyz)
