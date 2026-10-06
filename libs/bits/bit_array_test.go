@@ -288,3 +288,37 @@ func TestBitArrayProtoBuf(t *testing.T) {
 		}
 	}
 }
+
+// TestMalformedBitArrayNeverPanics guards against the index-out-of-range crash
+// triggered by a peer-supplied BitArray whose Bits and Elems disagree. FromProto
+// builds exactly such an object (Bits set, Elems empty) from a crafted
+// NewValidBlock/ProposalPOL/VoteSetBits proto. The consensus gossip paths then
+// call Not().PickRandom(), SetIndex and IsFull on it; none may panic.
+func TestMalformedBitArrayNeverPanics(t *testing.T) {
+	// Bits=1 but Elems empty: the object FromProto yields when a proto carries
+	// Bits=1 and no Elems.
+	bad := &BitArray{Bits: 1}
+
+	require.NotPanics(t, func() {
+		// consensus/reactor.go gossipDataForCatchup
+		idx, ok := bad.Not().PickRandom()
+		assert.False(t, ok)
+		assert.Equal(t, 0, idx)
+	})
+	require.NotPanics(t, func() {
+		idx, ok := bad.PickRandom()
+		assert.False(t, ok)
+		assert.Equal(t, 0, idx)
+	})
+	require.NotPanics(t, func() {
+		// consensus/reactor.go SetHasProposalBlockPart
+		assert.False(t, bad.SetIndex(0, true))
+	})
+	require.NotPanics(t, func() {
+		assert.False(t, bad.IsFull())
+	})
+	// getTrueIndices is the direct panic site: an inconsistent array has no set bits.
+	require.NotPanics(t, func() {
+		assert.Empty(t, bad.getTrueIndices())
+	})
+}

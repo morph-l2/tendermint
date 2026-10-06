@@ -69,7 +69,7 @@ func (bA *BitArray) SetIndex(i int, v bool) bool {
 }
 
 func (bA *BitArray) setIndex(i int, v bool) bool {
-	if i >= bA.Bits {
+	if i >= bA.Bits || i/64 >= len(bA.Elems) {
 		return false
 	}
 	if v {
@@ -225,6 +225,12 @@ func (bA *BitArray) IsFull() bool {
 	bA.mtx.Lock()
 	defer bA.mtx.Unlock()
 
+	// A malformed BitArray (len(Elems)==0 while Bits>0) would make the
+	// Elems[:len-1] slice below panic; such an array is not full.
+	if len(bA.Elems) == 0 {
+		return bA.Bits == 0
+	}
+
 	// Check all elements except the last
 	for _, elem := range bA.Elems[:len(bA.Elems)-1] {
 		if (^elem) != 0 {
@@ -258,6 +264,13 @@ func (bA *BitArray) PickRandom() (int, bool) {
 }
 
 func (bA *BitArray) getTrueIndices() []int {
+	// Guard against a malformed BitArray whose Bits and Elems disagree
+	// (e.g. decoded from a crafted peer proto with Bits>0 but empty Elems).
+	// Without this, the "handle last element" access below indexes
+	// bA.Elems[-1] and panics. An inconsistent array has no set bits.
+	if len(bA.Elems) == 0 || len(bA.Elems) != (bA.Bits+63)/64 {
+		return nil
+	}
 	trueIndices := make([]int, 0, bA.Bits)
 	curBit := 0
 	numElems := len(bA.Elems)
