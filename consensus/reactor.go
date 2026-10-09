@@ -113,7 +113,6 @@ func (conR *Reactor) OnStop() {
 	}
 }
 
-
 // SwitchToConsensus switches from block_sync mode to consensus mode.
 // It resets the state, turns off block_sync, and starts the consensus state-machine
 func (conR *Reactor) SwitchToConsensus(state sm.State, skipWAL bool) {
@@ -1541,6 +1540,9 @@ func (m *NewValidBlockMessage) ValidateBasic() error {
 	if err := m.BlockPartSetHeader.ValidateBasic(); err != nil {
 		return fmt.Errorf("wrong BlockPartSetHeader: %v", err)
 	}
+	if err := m.BlockParts.ValidateBasic(); err != nil {
+		return fmt.Errorf("wrong BlockParts: %v", err)
+	}
 	if m.BlockParts.Size() == 0 {
 		return errors.New("empty blockParts")
 	}
@@ -1594,6 +1596,9 @@ func (m *ProposalPOLMessage) ValidateBasic() error {
 	}
 	if m.ProposalPOLRound < 0 {
 		return errors.New("negative ProposalPOLRound")
+	}
+	if err := m.ProposalPOL.ValidateBasic(); err != nil {
+		return fmt.Errorf("wrong ProposalPOL: %v", err)
 	}
 	if m.ProposalPOL.Size() == 0 {
 		return errors.New("empty ProposalPOL bit array")
@@ -1739,6 +1744,9 @@ func (m *VoteSetBitsMessage) ValidateBasic() error {
 	}
 	if err := m.BlockID.ValidateBasic(); err != nil {
 		return fmt.Errorf("wrong BlockID: %v", err)
+	}
+	if err := m.Votes.ValidateBasic(); err != nil {
+		return fmt.Errorf("wrong Votes: %v", err)
 	}
 	// NOTE: Votes.Size() can be zero if the node does not have any
 	if m.Votes.Size() > types.MaxVotesCount {
