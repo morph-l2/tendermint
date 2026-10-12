@@ -322,3 +322,28 @@ func TestMalformedBitArrayNeverPanics(t *testing.T) {
 		assert.Empty(t, bad.getTrueIndices())
 	})
 }
+
+// TestBitArrayValidateBasic is ported verbatim from CometBFT v0.37.16
+// (ASA-2025-003). It asserts that a BitArray whose Bits and Elems disagree is
+// rejected, while nil / empty / consistent arrays pass.
+func TestBitArrayValidateBasic(t *testing.T) {
+	testCases := []struct {
+		name    string
+		bA1     *BitArray
+		expPass bool
+	}{
+		{"valid empty", &BitArray{}, true},
+		{"valid explicit 0 bits nil elements", &BitArray{Bits: 0, Elems: nil}, true},
+		{"valid explicit 0 bits 0 len elements", &BitArray{Bits: 0, Elems: make([]uint64, 0)}, true},
+		{"valid nil", nil, true},
+		{"valid with elements", NewBitArray(10), true},
+		{"more elements than bits specifies", &BitArray{Bits: 0, Elems: make([]uint64, 5)}, false},
+		{"less elements than bits specifies", &BitArray{Bits: 200, Elems: make([]uint64, 1)}, false},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.bA1.ValidateBasic()
+			require.Equal(t, err == nil, tc.expPass)
+		})
+	}
+}
