@@ -15,6 +15,7 @@ import (
 	tmrand "github.com/tendermint/tendermint/libs/rand"
 	"github.com/tendermint/tendermint/p2p"
 	tmcons "github.com/tendermint/tendermint/proto/tendermint/consensus"
+	tmprotobits "github.com/tendermint/tendermint/proto/tendermint/libs/bits"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/types"
 )
@@ -422,6 +423,51 @@ func TestConsMsgsVectors(t *testing.T) {
 			require.NoError(t, err)
 
 			require.Equal(t, tc.expBytes, hex.EncodeToString(bz))
+		})
+	}
+}
+
+// TestMsgFromProtoRejectsMalformedBitArray reproduces ASA-2025-003: a peer sends
+// a consensus message whose BitArray carries Bits>0 but no Elems. Such a message
+// must be rejected during decode (MsgFromProto -> ValidateBasic), before it ever
+// reaches the peer round state and the catchup gossip path that panics on it.
+func TestMsgFromProtoRejectsMalformedBitArray(t *testing.T) {
+	psh := types.PartSetHeader{Total: 1, Hash: tmrand.Bytes(32)}
+	bi := types.BlockID{Hash: tmrand.Bytes(32), PartSetHeader: psh}
+
+	// Bits=1, Elems empty: exactly what FromProto decodes into an inconsistent
+	// BitArray. ToProto() would drop empty Elems, so we build the proto directly.
+	badBits := &tmprotobits.BitArray{Bits: 1}
+
+	testCases := []struct {
+		name string
+		msg  *tmcons.Message
+	}{
+		{"NewValidBlock", &tmcons.Message{Sum: &tmcons.Message_NewValidBlock{
+			NewValidBlock: &tmcons.NewValidBlock{
+				Height: 1, Round: 0, BlockPartSetHeader: psh.ToProto(), BlockParts: badBits,
+			}}}},
+		{"ProposalPOL", &tmcons.Message{Sum: &tmcons.Message_ProposalPol{
+			ProposalPol: &tmcons.ProposalPOL{Height: 1, ProposalPolRound: 0, ProposalPol: *badBits},
+		}}},
+		{"VoteSetBits", &tmcons.Message{Sum: &tmcons.Message_VoteSetBits{
+			VoteSetBits: &tmcons.VoteSetBits{
+				Height: 1, Round: 0, Type: tmproto.PrevoteType, BlockID: bi.ToProto(), Votes: *badBits,
+			}}}},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			// Round-trip through the wire to mimic a real inbound packet.
+			bz, err := proto.Marshal(tc.msg)
+			require.NoError(t, err)
+
+			pb := new(tmcons.Message)
+			require.NoError(t, proto.Unmarshal(bz, pb))
+
+			_, err = MsgFromProto(pb)
+			require.Error(t, err, "malformed BitArray (Bits=1, Elems=nil) must be rejected on decode")
 		})
 	}
 }
