@@ -288,3 +288,62 @@ func TestBitArrayProtoBuf(t *testing.T) {
 		}
 	}
 }
+
+// TestMalformedBitArrayNeverPanics guards against the index-out-of-range crash
+// triggered by a peer-supplied BitArray whose Bits and Elems disagree. FromProto
+// builds exactly such an object (Bits set, Elems empty) from a crafted
+// NewValidBlock/ProposalPOL/VoteSetBits proto. The consensus gossip paths then
+// call Not().PickRandom(), SetIndex and IsFull on it; none may panic.
+func TestMalformedBitArrayNeverPanics(t *testing.T) {
+	// Bits=1 but Elems empty: the object FromProto yields when a proto carries
+	// Bits=1 and no Elems.
+	bad := &BitArray{Bits: 1}
+
+	require.NotPanics(t, func() {
+		// consensus/reactor.go gossipDataForCatchup
+		idx, ok := bad.Not().PickRandom()
+		assert.False(t, ok)
+		assert.Equal(t, 0, idx)
+	})
+	require.NotPanics(t, func() {
+		idx, ok := bad.PickRandom()
+		assert.False(t, ok)
+		assert.Equal(t, 0, idx)
+	})
+	require.NotPanics(t, func() {
+		// consensus/reactor.go SetHasProposalBlockPart
+		assert.False(t, bad.SetIndex(0, true))
+	})
+	require.NotPanics(t, func() {
+		assert.False(t, bad.IsFull())
+	})
+	// getTrueIndices is the direct panic site: an inconsistent array has no set bits.
+	require.NotPanics(t, func() {
+		assert.Empty(t, bad.getTrueIndices())
+	})
+}
+
+// TestBitArrayValidateBasic is ported verbatim from CometBFT v0.37.16
+// (ASA-2025-003). It asserts that a BitArray whose Bits and Elems disagree is
+// rejected, while nil / empty / consistent arrays pass.
+func TestBitArrayValidateBasic(t *testing.T) {
+	testCases := []struct {
+		name    string
+		bA1     *BitArray
+		expPass bool
+	}{
+		{"valid empty", &BitArray{}, true},
+		{"valid explicit 0 bits nil elements", &BitArray{Bits: 0, Elems: nil}, true},
+		{"valid explicit 0 bits 0 len elements", &BitArray{Bits: 0, Elems: make([]uint64, 0)}, true},
+		{"valid nil", nil, true},
+		{"valid with elements", NewBitArray(10), true},
+		{"more elements than bits specifies", &BitArray{Bits: 0, Elems: make([]uint64, 5)}, false},
+		{"less elements than bits specifies", &BitArray{Bits: 200, Elems: make([]uint64, 1)}, false},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.bA1.ValidateBasic()
+			require.Equal(t, err == nil, tc.expPass)
+		})
+	}
+}

@@ -27,7 +27,7 @@ func NewBitArray(bits int) *BitArray {
 	}
 	return &BitArray{
 		Bits:  bits,
-		Elems: make([]uint64, (bits+63)/64),
+		Elems: make([]uint64, numElements(bits)),
 	}
 }
 
@@ -69,7 +69,7 @@ func (bA *BitArray) SetIndex(i int, v bool) bool {
 }
 
 func (bA *BitArray) setIndex(i int, v bool) bool {
-	if i >= bA.Bits {
+	if i >= bA.Bits || i/64 >= len(bA.Elems) {
 		return false
 	}
 	if v {
@@ -100,7 +100,7 @@ func (bA *BitArray) copy() *BitArray {
 }
 
 func (bA *BitArray) copyBits(bits int) *BitArray {
-	c := make([]uint64, (bits+63)/64)
+	c := make([]uint64, numElements(bits))
 	copy(c, bA.Elems)
 	return &BitArray{
 		Bits:  bits,
@@ -225,6 +225,12 @@ func (bA *BitArray) IsFull() bool {
 	bA.mtx.Lock()
 	defer bA.mtx.Unlock()
 
+	// A malformed BitArray (len(Elems)==0 while Bits>0) would make the
+	// Elems[:len-1] slice below panic; such an array is not full.
+	if len(bA.Elems) == 0 {
+		return bA.Bits == 0
+	}
+
 	// Check all elements except the last
 	for _, elem := range bA.Elems[:len(bA.Elems)-1] {
 		if (^elem) != 0 {
@@ -258,6 +264,13 @@ func (bA *BitArray) PickRandom() (int, bool) {
 }
 
 func (bA *BitArray) getTrueIndices() []int {
+	// Guard against a malformed BitArray whose Bits and Elems disagree
+	// (e.g. decoded from a crafted peer proto with Bits>0 but empty Elems).
+	// Without this, the "handle last element" access below indexes
+	// bA.Elems[-1] and panics. An inconsistent array has no set bits.
+	if len(bA.Elems) == 0 || len(bA.Elems) != numElements(bA.Bits) {
+		return nil
+	}
 	trueIndices := make([]int, 0, bA.Bits)
 	curBit := 0
 	numElems := len(bA.Elems)
@@ -441,4 +454,23 @@ func (bA *BitArray) FromProto(protoBitArray *tmprotobits.BitArray) {
 	if len(protoBitArray.Elems) > 0 {
 		bA.Elems = protoBitArray.Elems
 	}
+}
+
+// ValidateBasic validates a BitArray. Note that a nil BitArray and a BitArray of
+// size 0 bits is valid. However the number of Bits and Elems must be consistent
+// with each other. Ported from CometBFT v0.37.16 (ASA-2025-003).
+func (bA *BitArray) ValidateBasic() error {
+	if bA == nil {
+		return nil
+	}
+
+	expectedElems := numElements(bA.Size())
+	if expectedElems != len(bA.Elems) {
+		return fmt.Errorf("mismatch between specified number of bits %d, and number of elements %d, expected %d elements", bA.Size(), len(bA.Elems), expectedElems)
+	}
+	return nil
+}
+
+func numElements(bits int) int {
+	return (bits + 63) / 64
 }
