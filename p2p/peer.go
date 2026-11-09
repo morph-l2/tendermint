@@ -387,6 +387,11 @@ func createMConnection(
 			"chID", fmt.Sprintf("%#x", chID),
 		}
 		p.metrics.PeerReceiveBytesTotal.With(labels...).Add(float64(len(msgBytes)))
+		if f, ok := reactor.(MsgBytesFilter); ok {
+			if err := f.FilterMsgBytes(chID, p, msgBytes); err != nil {
+				panic(fmt.Errorf("rejected msg on chID %#x from %s: %w", chID, p.ID(), err))
+			}
+		}
 		reactor.Receive(chID, p, msgBytes)
 	}
 

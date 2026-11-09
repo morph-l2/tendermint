@@ -47,6 +47,13 @@ type Reactor interface {
 	Receive(chID byte, peer Peer, msgBytes []byte)
 }
 
+// MsgBytesFilter is an optional interface a Reactor may implement to inspect
+// raw message bytes on a channel before they are unmarshalled. If FilterMsgBytes
+// returns a non-nil error the message is dropped and the peer is disconnected.
+type MsgBytesFilter interface {
+	FilterMsgBytes(chID byte, src Peer, msgBytes []byte) error
+}
+
 //--------------------------------------
 
 type BaseReactor struct {

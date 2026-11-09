@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tendermint/tendermint/blocksync/msglimits"
 	"github.com/tendermint/tendermint/l2node"
 	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/p2p"
@@ -457,6 +458,15 @@ func (bcR *Reactor) syncBlockV2(block types.SyncableBlock, blocksSynced *uint64,
 		*lastHundred = time.Now()
 	}
 	return true
+}
+
+var _ p2p.MsgBytesFilter = (*Reactor)(nil)
+
+func (bcR *Reactor) FilterMsgBytes(chID byte, src p2p.Peer, msgBytes []byte) error {
+	if chID != BlocksyncChannel || len(msgBytes) == 0 {
+		return nil
+	}
+	return msglimits.ValidateCounts(msgBytes)
 }
 
 // Receive implements Reactor by handling 4 types of messages (look below).
