@@ -49,8 +49,13 @@ const (
 	// It has to cover how far the EL's canonical head can regress after a crash,
 	// which is upstream reth configuration rather than a fixed quantity: the
 	// ceiling is persistence_backpressure_threshold + memory_block_buffer_target,
-	// i.e. 16 on reth v2.4.0 (16 + 0) and 21 on reth v2.5.2 (16 + 5) with default
-	// settings. 32 covers the v2.5.2 default with margin.
+	// i.e. 16 on reth v2.4.0 (16 + 0), 21 on reth v2.5.2 (16 + 5) and 105 on
+	// reth v2.10.1 (100 + 5) with default settings. 128 covers the v2.10.1 default
+	// with margin.
+	//
+	// reth's state-masking suffix does not add to that ceiling: masked blocks stay
+	// in memory and count against the backpressure threshold, and a restart after
+	// a crash unwinds to the start of the suffix.
 	//
 	// When changing this or the EL's persistence configuration, keep:
 	//
@@ -65,13 +70,13 @@ const (
 	//
 	// A graceful EL shutdown persists up to the head, so the gap is 0 on SIGTERM
 	// and only non-zero after a crash.
-	backfillMaxDepth = 32
+	backfillMaxDepth = 128
 
 	// backfillCacheCapacity is how many recently applied blocks are retained so they
 	// can be re-pushed after the EL loses its unpersisted head. Kept above
 	// backfillMaxDepth so the oldest ancestor a backfill may need is still present;
 	// see the invariant on backfillMaxDepth.
-	backfillCacheCapacity = 64
+	backfillCacheCapacity = 256
 
 	// parentNotFoundError is the error text geth returns when a parent hash is
 	// absent from its chain (see go-ethereum/eth/catalyst/l2_api.go,

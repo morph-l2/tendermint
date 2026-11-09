@@ -55,3 +55,4 @@ Friendly reminder, we have a [bug bounty program](https://hackerone.com/tendermi
 - [docker] \#9073 enable cross platform build using docker buildx
 - [docker] \#9462 ensure Docker image uses consistent version of Go
 - [sequencer] \#45 Restore crash recovery when reth v2.5.2 loses its default in-memory block window. (@panos-xyz)
+- [sequencer] \#49 Restore crash recovery when reth v2.10.1 loses its default in-memory block window. (@panos-xyz)
