@@ -12,6 +12,7 @@ import (
 	"github.com/cosmos/gogoproto/proto"
 	"github.com/morph-l2/go-ethereum/common"
 
+	"github.com/tendermint/tendermint/blocksync/msglimits"
 	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/p2p"
 	bcproto "github.com/tendermint/tendermint/proto/tendermint/blocksync"
@@ -28,6 +29,11 @@ const (
 	peerGossipedCapacity = 500  // Per-peer gossiped tracking
 	applyInterval        = 3 * time.Second
 	syncInterval         = 5 * time.Second
+	// maxSequencerMsgSize bounds the raw inbound message buffer on the
+	// sequencer channels before decode. Set explicitly instead of inheriting
+	// p2p's 21MB default so the bound is intentional; the repeated-entry limits
+	// are enforced separately by FilterMsgBytes.
+	maxSequencerMsgSize = 21 * 1024 * 1024
 
 	// Sync request tracking
 	syncRequestTTL         = 20 * time.Second
@@ -289,9 +295,18 @@ func (r *BlockBroadcastReactor) OnReset() error {
 
 func (r *BlockBroadcastReactor) GetChannels() []*p2p.ChannelDescriptor {
 	return []*p2p.ChannelDescriptor{
-		{ID: BlockBroadcastChannel, Priority: 6, SendQueueCapacity: 1000, RecvBufferCapacity: 50 * 4096},
-		{ID: SequencerSyncChannel, Priority: 5, SendQueueCapacity: 1000, RecvBufferCapacity: 50 * 4096},
+		{ID: BlockBroadcastChannel, Priority: 6, SendQueueCapacity: 1000, RecvBufferCapacity: 50 * 4096, RecvMessageCapacity: maxSequencerMsgSize},
+		{ID: SequencerSyncChannel, Priority: 5, SendQueueCapacity: 1000, RecvBufferCapacity: 50 * 4096, RecvMessageCapacity: maxSequencerMsgSize},
 	}
+}
+
+var _ p2p.MsgBytesFilter = (*BlockBroadcastReactor)(nil)
+
+func (r *BlockBroadcastReactor) FilterMsgBytes(chID byte, src p2p.Peer, msgBytes []byte) error {
+	if (chID != BlockBroadcastChannel && chID != SequencerSyncChannel) || len(msgBytes) == 0 {
+		return nil
+	}
+	return msglimits.ValidateCounts(msgBytes)
 }
 
 func (r *BlockBroadcastReactor) AddPeer(peer p2p.Peer) {

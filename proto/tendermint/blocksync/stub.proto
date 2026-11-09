@@ -1,0 +1,83 @@
+syntax = "proto3";
+package tendermint.blocksync;
+
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/tendermint/tendermint/proto/tendermint/blocksync";
+
+message LiteMessage {
+  LiteBlockResponse   block_response    = 3;
+  LiteBlockResponseV2 block_response_v2 = 6;
+}
+
+message LiteBlockResponse {
+  LiteBlock block = 1;
+}
+
+message LiteBlockResponseV2 {
+  LiteBlockV2 block = 1;
+}
+
+message LiteBlock {
+  LiteData         data        = 2;
+  LiteEvidenceList evidence    = 3;
+  LiteCommit       last_commit = 4;
+}
+
+message LiteData {
+  repeated bytes txs = 1 [(gogoproto.customtype) = "Empty", (gogoproto.nullable) = false];
+}
+
+message LiteEvidenceList {
+  repeated LiteEvidence evidence = 1 [(gogoproto.nullable) = false];
+}
+
+message LiteEvidence {
+  LiteLightClientAttack light_client_attack_evidence = 2;
+}
+
+message LiteLightClientAttack {
+  LiteLightBlock conflicting_block                   = 1;
+  repeated bytes byzantine_validators                = 3 [(gogoproto.customtype) = "Empty", (gogoproto.nullable) = false];
+}
+
+message LiteLightBlock {
+  LiteSignedHeader signed_header = 1;
+  LiteValidatorSet validator_set = 2;
+}
+
+message LiteSignedHeader {
+  LiteCommit commit = 2;
+}
+
+message LiteValidatorSet {
+  repeated bytes validators = 1 [(gogoproto.customtype) = "Empty", (gogoproto.nullable) = false];
+}
+
+message LiteCommit {
+  repeated bytes signatures = 4 [(gogoproto.customtype) = "Empty", (gogoproto.nullable) = false];
+}
+
+message LiteBlockV2 {
+  repeated bytes transactions = 7 [(gogoproto.customtype) = "Empty", (gogoproto.nullable) = false];
+}
+
+// LiteCount* mirror only the path to the evidence list, with the evidence
+// element itself a zero-size Empty. Decoding into LiteCountMessage counts the
+// evidence records for free, so the number of records can be bounded before the
+// descending LiteMessage decode allocates one struct per record.
+message LiteCountMessage {
+  LiteCountBlockResponse block_response = 3;
+}
+
+message LiteCountBlockResponse {
+  LiteCountBlock block = 1;
+}
+
+message LiteCountBlock {
+  LiteCountEvidenceList evidence = 3;
+}
+
+message LiteCountEvidenceList {
+  repeated bytes evidence = 1 [(gogoproto.customtype) = "Empty", (gogoproto.nullable) = false];
+}
