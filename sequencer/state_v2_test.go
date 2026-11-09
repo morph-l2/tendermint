@@ -640,10 +640,10 @@ func cacheGap(t *testing.T, s *StateV2, head *BlockV2, depth int) common.Hash {
 // backfillMaxDepth has to cover how far the EL's canonical head can regress
 // after a crash. That ceiling is upstream reth configuration rather than a
 // fixed quantity — persistence_backpressure_threshold + memory_block_buffer_target
-// is 16 on reth v2.4.0 and 21 on reth v2.5.2 — so the boundary is pinned here
-// instead of being left to the constant's comment. A depth short of it refuses
-// the gap outright, which is indistinguishable from a node that simply stopped
-// catching up.
+// is 16 on reth v2.4.0, 21 on reth v2.5.2 and 105 on reth v2.10.1 — so the
+// boundary is pinned here instead of being left to the constant's comment. A
+// depth short of it refuses the gap outright, which is indistinguishable from a
+// node that simply stopped catching up.
 func TestStateV2_Backfill_DepthBoundary(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -651,6 +651,7 @@ func TestStateV2_Backfill_DepthBoundary(t *testing.T) {
 		wantErr string
 	}{
 		{"reth v2.5.2 default ceiling", 21, ""},
+		{"reth v2.10.1 default ceiling", 105, ""},
 		{"exactly backfillMaxDepth", backfillMaxDepth, ""},
 		{"one past backfillMaxDepth", backfillMaxDepth + 1, "gap exceeds backfillMaxDepth"},
 	} {
