@@ -21,18 +21,31 @@ var (
 	ErrVerifierUnavailable = errors.New("verifier unavailable")
 )
 
-// SequencerVerifier verifies if an address is a valid L1 sequencer.
+// SequencerVerifier answers who the L1 contract designates as sequencer.
 type SequencerVerifier interface {
+	// SequencerAtHeight returns the address the L1 contract designates as
+	// the sequencer for the given L2 block height. It errors when that
+	// cannot be decided (e.g. no record covers the height).
+	SequencerAtHeight(l2Height uint64) (common.Address, error)
 	// IsSequencerAt checks if addr was the valid sequencer at the given L2 block height.
 	IsSequencerAt(addr common.Address, l2Height uint64) (bool, error)
 }
 
-// Signer interface for sequencer block signing
+// Signer is the sequencer's block-signing identity. It may hold several
+// keys (e.g. an old and a new sequencer key during a planned rotation):
+// before each block StateV2 asks the verifier which address the L1
+// contract designates for the next height and, if the signer holds that
+// key, signs with exactly it.
 type Signer interface {
-	// Sign signs the data with the sequencer's private key
-	Sign(data []byte) ([]byte, error)
-	// Address returns the sequencer's address
-	Address() common.Address
+	// Addresses returns every address this node can currently sign as, in
+	// configuration order. For logging / reporting; block production uses
+	// HasAddress.
+	Addresses() []common.Address
+	// HasAddress reports whether the signer currently holds a key for addr.
+	HasAddress(addr common.Address) bool
+	// SignWith signs data with the private key of addr. Returns an error
+	// if the signer holds no key for addr.
+	SignWith(addr common.Address, data []byte) ([]byte, error)
 }
 
 // SequencerHA is the abstraction for Raft HA cluster.
