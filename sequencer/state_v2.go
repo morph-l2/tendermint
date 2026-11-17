@@ -199,8 +199,6 @@ func (s *StateV2) OnStart() error {
 	// Fullnode (no signer) does not produce blocks; applyRoutine is managed by the reactor.
 	// Nodes with signer start roleCheckRoutine, which handles dynamic role detection.
 	if s.signer != nil {
-		addrs := s.signer.Addresses()
-		s.logger.Info("Sequencer signer keys", "count", len(addrs), "addresses", addrHexes(addrs))
 		go s.roleCheckRoutine()
 	}
 
@@ -368,15 +366,6 @@ func (s *StateV2) handOffLeader(addr common.Address) {
 		s.logger.Error("Leader holds no key for the designated sequencer and failed to hand off",
 			"designated", addr.Hex(), "err", err)
 	}
-}
-
-// addrHexes renders addrs as hex strings, for logging.
-func addrHexes(addrs []common.Address) []string {
-	hexes := make([]string, len(addrs))
-	for i, a := range addrs {
-		hexes[i] = a.Hex()
-	}
-	return hexes
 }
 
 // assembleBlock calls geth Engine API to build a candidate block from the current
