@@ -116,6 +116,7 @@ type mockSequencerHA struct {
 	leader    bool
 	commitErr error
 	subCh     chan *BlockV2
+	handOffs  []common.Address // TransferLeaderToEligible calls, in order
 }
 
 func newMockSequencerHA(leader bool) *mockSequencerHA {
@@ -133,6 +134,10 @@ func (m *mockSequencerHA) Commit(block *BlockV2) error               { return m.
 func (m *mockSequencerHA) Subscribe() <-chan *BlockV2                { return m.subCh }
 func (m *mockSequencerHA) SetOnBlockApplied(fn func(*BlockV2) error) {}
 func (m *mockSequencerHA) TransferLeader() error                     { return nil }
+func (m *mockSequencerHA) TransferLeaderToEligible(addr common.Address) error {
+	m.handOffs = append(m.handOffs, addr)
+	return nil
+}
 
 // newTestMockL2Node creates a mock L2Node for testing.
 func newTestMockL2Node() l2node.L2Node {
@@ -861,6 +866,46 @@ func TestProduceBlock_LeaderSwitchesKeyWithoutLeaderChange(t *testing.T) {
 		if signer.signedBy[i] != a {
 			t.Fatalf("block %d signed by %s, want %s", 9+i, signer.signedBy[i].Hex(), a.Hex())
 		}
+	}
+}
+
+// A leader that only holds the old key cannot sign from the rotation height
+// on: it hands leadership to the holder of the designated key, retrying on
+// every tick while it is still leader.
+func TestIsActiveSequencer_LeaderWithoutDesignatedKeyHandsOff(t *testing.T) {
+	signer := &mockSignerImpl{addrs: []common.Address{oldKey}}
+	ha := newMockSequencerHA(true)
+	s := newMultiKeyState(t, signer, &mockSequencerVerifier{designated: rotateAt(11)}, ha)
+
+	// Before the rotation height the old key is designated: no hand-off.
+	s.latestBlock = &BlockV2{Number: 9}
+	if !isActive(s) || len(ha.handOffs) != 0 {
+		t.Fatalf("next=10: active with no hand-off expected, hand-offs = %v", ha.handOffs)
+	}
+
+	// The next block is the rotation height: hand off to the new key's holder.
+	s.latestBlock = &BlockV2{Number: 10}
+	if isActive(s) {
+		t.Fatal("next=11: must not be active without the designated key")
+	}
+	if len(ha.handOffs) != 1 || ha.handOffs[0] != newKey {
+		t.Fatalf("hand-offs = %v, want one to the new key", ha.handOffs)
+	}
+
+	// Still leader on the following tick: try again.
+	isActive(s)
+	if len(ha.handOffs) != 2 {
+		t.Fatalf("hand-offs = %d, want a retry on the next tick", len(ha.handOffs))
+	}
+
+	// Neither a follower nor a leader that cannot tell who is designated hands off.
+	ha.leader = false
+	isActive(s)
+	ha.leader = true
+	s.verifier = &mockSequencerVerifier{err: errors.New("l1 rpc down")}
+	isActive(s)
+	if len(ha.handOffs) != 2 {
+		t.Fatalf("hand-offs = %d, want none from a follower or on a verifier error", len(ha.handOffs))
 	}
 }
 

@@ -87,6 +87,13 @@ type SequencerHA interface {
 	SetOnBlockApplied(fn func(*BlockV2) error)
 
 	TransferLeader() error
+
+	// TransferLeaderToEligible hands Raft leadership to an eligible cluster
+	// member: one that holds a key for designated, the address the L1
+	// contract designates as sequencer for the next block. Called by a
+	// leader that holds no key for it. On error (e.g. no member is
+	// eligible) the caller stays leader and retries later.
+	TransferLeaderToEligible(designated common.Address) error
 }
 
 // L1Tracker reports whether L1 RPC has fallen too far behind for this node to

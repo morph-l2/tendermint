@@ -339,10 +339,10 @@ func (s *StateV2) isActiveSequencer() (signingAddr common.Address, active bool) 
 // as the sequencer for height next and reports whether this node's signer
 // holds that key. The contract maps each height to exactly one address, so
 // there is nothing to choose between: either we hold the designated key and
-// sign with it, or we don't produce.
+// sign with it, or we don't produce — and, as HA leader, hand leadership to
+// a node that does hold it.
 //
-// A verifier error means "cannot decide": we must neither produce nor
-// (later) hand off leadership.
+// A verifier error means "cannot decide": we neither produce nor hand off.
 func (s *StateV2) signingAddrFor(next uint64) (common.Address, bool) {
 	designated, err := s.verifier.SequencerAtHeight(next)
 	if err != nil {
@@ -350,9 +350,24 @@ func (s *StateV2) signingAddrFor(next uint64) (common.Address, bool) {
 		return common.Address{}, false
 	}
 	if !s.signer.HasAddress(designated) {
+		s.handOffLeader(designated)
 		return common.Address{}, false
 	}
 	return designated, true
+}
+
+// handOffLeader passes Raft leadership to a node whose signer holds addr,
+// the key designated for the next block, which this leader lacks (e.g. it
+// was not given the new key before a rotation height). No-op without HA.
+// Retried on every production tick for as long as this node stays leader.
+func (s *StateV2) handOffLeader(addr common.Address) {
+	if s.ha == nil {
+		return
+	}
+	if err := s.ha.TransferLeaderToEligible(addr); err != nil {
+		s.logger.Error("Leader holds no key for the designated sequencer and failed to hand off",
+			"designated", addr.Hex(), "err", err)
+	}
 }
 
 // addrHexes renders addrs as hex strings, for logging.
