@@ -20,31 +20,85 @@ import (
 // ============================================================================
 
 // mockSignerImpl is a mock implementation of Signer for testing.
+// Single-key by default (address); set addrs for a multi-key signer.
 type mockSignerImpl struct {
 	address   common.Address
+	addrs     []common.Address
 	signature []byte
+	signedBy  []common.Address // addresses SignWith was called with, in order
 }
 
-func (m *mockSignerImpl) Sign(data []byte) ([]byte, error) {
+func (m *mockSignerImpl) Addresses() []common.Address {
+	if m.addrs != nil {
+		return m.addrs
+	}
+	return []common.Address{m.address}
+}
+
+func (m *mockSignerImpl) HasAddress(addr common.Address) bool {
+	for _, a := range m.Addresses() {
+		if a == addr {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *mockSignerImpl) SignWith(addr common.Address, data []byte) ([]byte, error) {
+	if !m.HasAddress(addr) {
+		return nil, fmt.Errorf("unknown signer address %s", addr.Hex())
+	}
+	m.signedBy = append(m.signedBy, addr)
 	if m.signature != nil {
 		return m.signature, nil
 	}
 	return make([]byte, 65), nil
 }
 
-func (m *mockSignerImpl) Address() common.Address {
-	return m.address
+// isActive is the bool half of isActiveSequencer, for terse assertions.
+func isActive(s *StateV2) bool {
+	_, ok := s.isActiveSequencer()
+	return ok
 }
 
 // mockSequencerVerifier is a mock implementation of SequencerVerifier for testing.
+//
+// If designated is set, it decides per height (height -> sequencer address).
+// Otherwise it gives a blanket answer driven by isSequencer:
+//   - IsSequencerAt (block verification) returns isSequencer for any address;
+//   - SequencerAtHeight (block production) returns sequencer when isSequencer
+//     is true — set it to the signer's address — and an address nobody holds
+//     when it is false.
 type mockSequencerVerifier struct {
 	isSequencer bool
+	sequencer   common.Address
 	err         error
+	designated  func(height uint64) common.Address
+}
+
+// mockOtherSequencer is the designated address when the blanket answer is
+// "not the sequencer": some other party no test signer holds a key for.
+var mockOtherSequencer = common.HexToAddress("0x00000000000000000000000000000000000000ff")
+
+func (m *mockSequencerVerifier) SequencerAtHeight(l2Height uint64) (common.Address, error) {
+	if m.err != nil {
+		return common.Address{}, m.err
+	}
+	if m.designated != nil {
+		return m.designated(l2Height), nil
+	}
+	if !m.isSequencer {
+		return mockOtherSequencer, nil
+	}
+	return m.sequencer, nil
 }
 
 func (m *mockSequencerVerifier) IsSequencerAt(addr common.Address, l2Height uint64) (bool, error) {
 	if m.err != nil {
 		return false, m.err
+	}
+	if m.designated != nil {
+		return m.designated(l2Height) == addr, nil
 	}
 	return m.isSequencer, nil
 }
@@ -62,6 +116,7 @@ type mockSequencerHA struct {
 	leader    bool
 	commitErr error
 	subCh     chan *BlockV2
+	handOffs  []common.Address // TransferLeaderToEligible calls, in order
 }
 
 func newMockSequencerHA(leader bool) *mockSequencerHA {
@@ -79,6 +134,10 @@ func (m *mockSequencerHA) Commit(block *BlockV2) error               { return m.
 func (m *mockSequencerHA) Subscribe() <-chan *BlockV2                { return m.subCh }
 func (m *mockSequencerHA) SetOnBlockApplied(fn func(*BlockV2) error) {}
 func (m *mockSequencerHA) TransferLeader() error                     { return nil }
+func (m *mockSequencerHA) TransferLeaderToEligible(addr common.Address) error {
+	m.handOffs = append(m.handOffs, addr)
+	return nil
+}
 
 // newTestMockL2Node creates a mock L2Node for testing.
 func newTestMockL2Node() l2node.L2Node {
@@ -152,7 +211,7 @@ func TestStateV2_SignBlock(t *testing.T) {
 		Hash:   [32]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32},
 	}
 
-	if err := stateV2.signBlock(block); err != nil {
+	if err := stateV2.signBlock(block, mockSigner.address); err != nil {
 		t.Fatalf("signBlock failed: %v", err)
 	}
 	if len(block.Signature) != 65 {
@@ -170,7 +229,7 @@ func TestStateV2_SignBlockWithoutSigner(t *testing.T) {
 	}
 
 	block := &types.BlockV2{Number: 1, Hash: [32]byte{1, 2, 3, 4}}
-	if err := stateV2.signBlock(block); err == nil {
+	if err := stateV2.signBlock(block, common.Address{}); err == nil {
 		t.Error("signBlock should fail without signer")
 	}
 }
@@ -286,12 +345,12 @@ func TestStateV2_IsActiveSequencer_NonHA_Active(t *testing.T) {
 	mockL2Node := newTestMockL2Node()
 	logger := log.NewNopLogger()
 	mockSigner := &mockSignerImpl{address: common.HexToAddress("0x1")}
-	mockVerifier := &mockSequencerVerifier{isSequencer: true}
+	mockVerifier := &mockSequencerVerifier{isSequencer: true, sequencer: mockSigner.address}
 
 	s, _ := NewStateV2(mockL2Node, logger, mockVerifier, &mockL1Tracker{halt: false}, mockSigner, nil, nil)
 	s.latestBlock = &BlockV2{Number: 0}
 
-	if !s.isActiveSequencer() {
+	if !isActive(s) {
 		t.Error("should be active sequencer when verifier returns true")
 	}
 }
@@ -305,7 +364,7 @@ func TestStateV2_IsActiveSequencer_NonHA_Inactive(t *testing.T) {
 	s, _ := NewStateV2(mockL2Node, logger, mockVerifier, &mockL1Tracker{halt: false}, mockSigner, nil, nil)
 	s.latestBlock = &BlockV2{Number: 0}
 
-	if s.isActiveSequencer() {
+	if isActive(s) {
 		t.Error("should not be active sequencer when verifier returns false")
 	}
 }
@@ -314,13 +373,13 @@ func TestStateV2_IsActiveSequencer_HA_Leader(t *testing.T) {
 	mockL2Node := newTestMockL2Node()
 	logger := log.NewNopLogger()
 	mockSigner := &mockSignerImpl{address: common.HexToAddress("0x1")}
-	mockVerifier := &mockSequencerVerifier{isSequencer: true}
+	mockVerifier := &mockSequencerVerifier{isSequencer: true, sequencer: mockSigner.address}
 	ha := newMockSequencerHA(true)
 
 	s, _ := NewStateV2(mockL2Node, logger, mockVerifier, &mockL1Tracker{halt: false}, mockSigner, nil, ha)
 	s.latestBlock = &BlockV2{Number: 0}
 
-	if !s.isActiveSequencer() {
+	if !isActive(s) {
 		t.Error("HA leader should be active sequencer")
 	}
 }
@@ -329,13 +388,13 @@ func TestStateV2_IsActiveSequencer_HA_Follower(t *testing.T) {
 	mockL2Node := newTestMockL2Node()
 	logger := log.NewNopLogger()
 	mockSigner := &mockSignerImpl{address: common.HexToAddress("0x1")}
-	mockVerifier := &mockSequencerVerifier{isSequencer: true} // L1 says active
-	ha := newMockSequencerHA(false)                           // but not leader
+	mockVerifier := &mockSequencerVerifier{isSequencer: true, sequencer: mockSigner.address} // L1 says active
+	ha := newMockSequencerHA(false)                                                          // but not leader
 
 	s, _ := NewStateV2(mockL2Node, logger, mockVerifier, &mockL1Tracker{halt: false}, mockSigner, nil, ha)
 	s.latestBlock = &BlockV2{Number: 0}
 
-	if s.isActiveSequencer() {
+	if isActive(s) {
 		t.Error("HA follower should not be active sequencer even if L1 says active")
 	}
 }
@@ -349,15 +408,15 @@ func TestStateV2_IsActiveSequencer_VerifierError(t *testing.T) {
 	s, _ := NewStateV2(mockL2Node, logger, mockVerifier, &mockL1Tracker{halt: false}, mockSigner, nil, nil)
 	s.latestBlock = &BlockV2{Number: 0}
 
-	if s.isActiveSequencer() {
+	if isActive(s) {
 		t.Error("should return false when verifier returns error")
 	}
 }
 
 func TestStateV2_IsActiveSequencer_ReportsInactiveAfterBecomingInactive(t *testing.T) {
 	logger := log.NewNopLogger()
-	verifier := &mockSequencerVerifier{isSequencer: true}
 	signer := &mockSignerImpl{address: common.HexToAddress("0x1")}
+	verifier := &mockSequencerVerifier{isSequencer: true, sequencer: signer.address}
 	l1Tracker := &mockL1Tracker{halt: false}
 	ha := newMockSequencerHA(true)
 	gauge := &recordingGauge{}
@@ -371,7 +430,7 @@ func TestStateV2_IsActiveSequencer_ReportsInactiveAfterBecomingInactive(t *testi
 	s.SetMetrics(metrics)
 	s.latestBlock = &BlockV2{Number: 10}
 
-	if !s.isActiveSequencer() {
+	if !isActive(s) {
 		t.Fatal("expected active when HA leader, L1 healthy, and verifier says sequencer")
 	}
 	if gauge.value != 1 {
@@ -379,7 +438,7 @@ func TestStateV2_IsActiveSequencer_ReportsInactiveAfterBecomingInactive(t *testi
 	}
 
 	l1Tracker.halt = true
-	if s.isActiveSequencer() {
+	if isActive(s) {
 		t.Fatal("expected inactive when L1 tracker halts production")
 	}
 	if gauge.value != 0 {
@@ -387,7 +446,7 @@ func TestStateV2_IsActiveSequencer_ReportsInactiveAfterBecomingInactive(t *testi
 	}
 
 	l1Tracker.halt = false
-	if !s.isActiveSequencer() {
+	if !isActive(s) {
 		t.Fatal("expected active again after L1 recovers")
 	}
 	if gauge.value != 1 {
@@ -395,7 +454,7 @@ func TestStateV2_IsActiveSequencer_ReportsInactiveAfterBecomingInactive(t *testi
 	}
 
 	ha.leader = false
-	if s.isActiveSequencer() {
+	if isActive(s) {
 		t.Fatal("expected inactive when HA node is no longer leader")
 	}
 	if gauge.value != 0 {
@@ -483,7 +542,7 @@ func TestIsActiveSequencer_L1TrackerHaltsProduction(t *testing.T) {
 		t.Fatalf("NewStateV2: %v", err)
 	}
 	s.latestBlock = &BlockV2{Number: 10}
-	if !s.isActiveSequencer() {
+	if !isActive(s) {
 		t.Fatal("expected active when L1 healthy and verifier says sequencer")
 	}
 
@@ -493,7 +552,7 @@ func TestIsActiveSequencer_L1TrackerHaltsProduction(t *testing.T) {
 		t.Fatalf("NewStateV2: %v", err)
 	}
 	s2.latestBlock = &BlockV2{Number: 10}
-	if s2.isActiveSequencer() {
+	if isActive(s2) {
 		t.Fatal("expected NOT active when L1 tracker halts production")
 	}
 }
@@ -686,5 +745,174 @@ func TestStateV2_Backfill_DepthBoundary(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// ============================================================================
+// Multi-key signer: the node holds several keys and, per height, signs with
+// the one the L1 contract designates — no leader change needed.
+// ============================================================================
+
+var (
+	oldKey = common.HexToAddress("0x00000000000000000000000000000000000000a1")
+	newKey = common.HexToAddress("0x00000000000000000000000000000000000000b2")
+)
+
+// rotateAt designates oldKey below height h and newKey from h on.
+func rotateAt(h uint64) func(uint64) common.Address {
+	return func(height uint64) common.Address {
+		if height < h {
+			return oldKey
+		}
+		return newKey
+	}
+}
+
+func newMultiKeyState(t *testing.T, signer *mockSignerImpl, verifier *mockSequencerVerifier, ha SequencerHA) *StateV2 {
+	t.Helper()
+	s, err := NewStateV2(newTestMockL2Node(), log.NewNopLogger(), verifier, &mockL1Tracker{}, signer, nil, ha)
+	if err != nil {
+		t.Fatalf("NewStateV2: %v", err)
+	}
+	return s
+}
+
+func TestSigningAddrFor_SwitchesKeyAtRotationHeight(t *testing.T) {
+	signer := &mockSignerImpl{addrs: []common.Address{oldKey, newKey}}
+	s := newMultiKeyState(t, signer, &mockSequencerVerifier{designated: rotateAt(100)}, nil)
+
+	for _, tc := range []struct {
+		next uint64
+		want common.Address
+	}{{98, oldKey}, {99, oldKey}, {100, newKey}, {101, newKey}} {
+		got, ok := s.signingAddrFor(tc.next)
+		if !ok || got != tc.want {
+			t.Fatalf("signingAddrFor(%d) = %s,%v; want %s,true", tc.next, got.Hex(), ok, tc.want.Hex())
+		}
+	}
+
+	// Key order in the signer does not matter — the contract decides.
+	signer.addrs = []common.Address{newKey, oldKey}
+	if got, ok := s.signingAddrFor(99); !ok || got != oldKey {
+		t.Fatalf("reordered keys: got %s,%v; want old key", got.Hex(), ok)
+	}
+}
+
+func TestSigningAddrFor_NoKeyDesignated(t *testing.T) {
+	// Node only holds the old key; from height 100 it has no valid key.
+	signer := &mockSignerImpl{addrs: []common.Address{oldKey}}
+	s := newMultiKeyState(t, signer, &mockSequencerVerifier{designated: rotateAt(100)}, nil)
+	if _, ok := s.signingAddrFor(99); !ok {
+		t.Fatal("old key should be valid before the rotation height")
+	}
+	if addr, ok := s.signingAddrFor(100); ok {
+		t.Fatalf("no key should be valid at the rotation height, got %s", addr.Hex())
+	}
+}
+
+func TestSigningAddrFor_VerifierErrorIsNotActive(t *testing.T) {
+	// The designated sequencer cannot be looked up; even though the node
+	// holds every key, an undecidable check must not produce a block.
+	signer := &mockSignerImpl{addrs: []common.Address{oldKey, newKey}}
+	verifier := &mockSequencerVerifier{
+		designated: rotateAt(0), // newKey everywhere
+		err:        errors.New("l1 rpc down"),
+	}
+	s := newMultiKeyState(t, signer, verifier, nil)
+	if addr, ok := s.signingAddrFor(5); ok {
+		t.Fatalf("expected inactive on verifier error, got %s", addr.Hex())
+	}
+}
+
+func TestIsActiveSequencer_ReturnsSigningAddr(t *testing.T) {
+	signer := &mockSignerImpl{addrs: []common.Address{oldKey, newKey}}
+	s := newMultiKeyState(t, signer, &mockSequencerVerifier{designated: rotateAt(11)}, newMockSequencerHA(true))
+
+	s.latestBlock = &BlockV2{Number: 9}
+	if addr, ok := s.isActiveSequencer(); !ok || addr != oldKey {
+		t.Fatalf("next=10: got %s,%v; want old key", addr.Hex(), ok)
+	}
+	s.latestBlock = &BlockV2{Number: 10}
+	if addr, ok := s.isActiveSequencer(); !ok || addr != newKey {
+		t.Fatalf("next=11: got %s,%v; want new key", addr.Hex(), ok)
+	}
+
+	// Followers never produce, whatever keys they hold.
+	s.ha = newMockSequencerHA(false)
+	if _, ok := s.isActiveSequencer(); ok {
+		t.Fatal("HA follower must not be active")
+	}
+}
+
+// End-to-end through produceBlock (HA leader): the same leader keeps
+// producing across the rotation height and the block signature switches
+// from the old key to the new one exactly there.
+func TestProduceBlock_LeaderSwitchesKeyWithoutLeaderChange(t *testing.T) {
+	signer := &mockSignerImpl{addrs: []common.Address{oldKey, newKey}}
+	ha := newMockSequencerHA(true)
+	s := newMultiKeyState(t, signer, &mockSequencerVerifier{designated: rotateAt(11)}, ha)
+
+	for _, latest := range []uint64{8, 9, 10, 11} {
+		s.latestBlock = &BlockV2{Number: latest}
+		if !s.produceBlock(false) {
+			t.Fatalf("produceBlock after height %d failed", latest)
+		}
+	}
+	want := []common.Address{oldKey, oldKey, newKey, newKey} // heights 9,10,11,12
+	if len(signer.signedBy) != len(want) {
+		t.Fatalf("signed %d blocks, want %d", len(signer.signedBy), len(want))
+	}
+	for i, a := range want {
+		if signer.signedBy[i] != a {
+			t.Fatalf("block %d signed by %s, want %s", 9+i, signer.signedBy[i].Hex(), a.Hex())
+		}
+	}
+}
+
+// A leader that only holds the old key cannot sign from the rotation height
+// on: it hands leadership to the holder of the designated key, retrying on
+// every tick while it is still leader.
+func TestIsActiveSequencer_LeaderWithoutDesignatedKeyHandsOff(t *testing.T) {
+	signer := &mockSignerImpl{addrs: []common.Address{oldKey}}
+	ha := newMockSequencerHA(true)
+	s := newMultiKeyState(t, signer, &mockSequencerVerifier{designated: rotateAt(11)}, ha)
+
+	// Before the rotation height the old key is designated: no hand-off.
+	s.latestBlock = &BlockV2{Number: 9}
+	if !isActive(s) || len(ha.handOffs) != 0 {
+		t.Fatalf("next=10: active with no hand-off expected, hand-offs = %v", ha.handOffs)
+	}
+
+	// The next block is the rotation height: hand off to the new key's holder.
+	s.latestBlock = &BlockV2{Number: 10}
+	if isActive(s) {
+		t.Fatal("next=11: must not be active without the designated key")
+	}
+	if len(ha.handOffs) != 1 || ha.handOffs[0] != newKey {
+		t.Fatalf("hand-offs = %v, want one to the new key", ha.handOffs)
+	}
+
+	// Still leader on the following tick: try again.
+	isActive(s)
+	if len(ha.handOffs) != 2 {
+		t.Fatalf("hand-offs = %d, want a retry on the next tick", len(ha.handOffs))
+	}
+
+	// Neither a follower nor a leader that cannot tell who is designated hands off.
+	ha.leader = false
+	isActive(s)
+	ha.leader = true
+	s.verifier = &mockSequencerVerifier{err: errors.New("l1 rpc down")}
+	isActive(s)
+	if len(ha.handOffs) != 2 {
+		t.Fatalf("hand-offs = %d, want none from a follower or on a verifier error", len(ha.handOffs))
+	}
+}
+
+func TestSignBlock_UnknownAddressFails(t *testing.T) {
+	signer := &mockSignerImpl{addrs: []common.Address{oldKey}}
+	s := newMultiKeyState(t, signer, &mockSequencerVerifier{}, nil)
+	if err := s.signBlock(&BlockV2{Number: 1}, newKey); err == nil {
+		t.Fatal("signing with an address the signer doesn't hold must fail")
 	}
 }

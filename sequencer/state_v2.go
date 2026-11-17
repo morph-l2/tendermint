@@ -253,7 +253,8 @@ func (s *StateV2) roleCheckRoutine() {
 }
 
 func (s *StateV2) produceBlock(skipEmptyBlock bool) bool {
-	if !s.isActiveSequencer() {
+	signingAddr, active := s.isActiveSequencer()
+	if !active {
 		return false
 	}
 	block, collectedL1Msgs, err := s.assembleBlock()
@@ -264,7 +265,7 @@ func (s *StateV2) produceBlock(skipEmptyBlock bool) bool {
 	if skipEmptyBlock && len(block.Transactions) == 0 && !collectedL1Msgs {
 		return false // empty block, discard and wait for next tick
 	}
-	err = s.commitBlock(block, collectedL1Msgs)
+	err = s.commitBlock(block, signingAddr, collectedL1Msgs)
 	if err != nil {
 		_ = s.transferLeader()
 		return false
@@ -299,39 +300,72 @@ func resetTimer(t *time.Timer, d time.Duration) {
 	t.Reset(d)
 }
 
-// isActiveSequencer returns true if this node should produce the next block.
-// For HA mode: must be Raft leader AND L1-designated sequencer.
-// For single-node mode: must be L1-designated sequencer.
-func (s *StateV2) isActiveSequencer() (active bool) {
+// isActiveSequencer reports whether this node should produce the next block
+// and, if so, which of its signer addresses must sign it.
+// For HA mode: must be Raft leader AND hold an L1-designated sequencer key.
+// For single-node mode: must hold an L1-designated sequencer key.
+//
+// The returned address is what signBlock signs with — the key is chosen
+// once here, together with the eligibility decision, never re-picked at
+// signing time, so the check and the signature always use the same key.
+func (s *StateV2) isActiveSequencer() (signingAddr common.Address, active bool) {
 	defer func() {
 		s.metrics.SetActiveSequencer(active)
 	}()
 
 	// HA mode: must be Raft leader
 	if s.ha != nil && !s.ha.IsLeader() {
-		return false
+		return common.Address{}, false
 	}
 
 	// L1 tracker: stop producing if L1 RPC is stale (we may be blind to
 	// SequencerUpdated events on L1 and could produce as a revoked sequencer).
 	if s.l1Tracker.IsHalt() {
-		return false
+		return common.Address{}, false
 	}
 
 	s.mtx.RLock()
 	lb := s.latestBlock
 	s.mtx.RUnlock()
 	if lb == nil {
-		return false
+		return common.Address{}, false
 	}
-	nextHeight := lb.Number + 1
+	return s.signingAddrFor(lb.Number + 1)
+}
 
-	ok, err := s.verifier.IsSequencerAt(s.signer.Address(), nextHeight)
+// signingAddrFor asks the verifier which address the L1 contract designates
+// as the sequencer for height next and reports whether this node's signer
+// holds that key. The contract maps each height to exactly one address, so
+// there is nothing to choose between: either we hold the designated key and
+// sign with it, or we don't produce — and, as HA leader, hand leadership to
+// a node that does hold it.
+//
+// A verifier error means "cannot decide": we neither produce nor hand off.
+func (s *StateV2) signingAddrFor(next uint64) (common.Address, bool) {
+	designated, err := s.verifier.SequencerAtHeight(next)
 	if err != nil {
-		s.logger.Error("Failed to check sequencer status", "height", nextHeight, "err", err)
-		return false
+		s.logger.Error("Failed to check sequencer status", "height", next, "err", err)
+		return common.Address{}, false
 	}
-	return ok
+	if !s.signer.HasAddress(designated) {
+		s.handOffLeader(designated)
+		return common.Address{}, false
+	}
+	return designated, true
+}
+
+// handOffLeader passes Raft leadership to a node whose signer holds addr,
+// the key designated for the next block, which this leader lacks (e.g. it
+// was not given the new key before a rotation height). No-op without HA.
+// Retried on every production tick for as long as this node stays leader.
+func (s *StateV2) handOffLeader(addr common.Address) {
+	if s.ha == nil {
+		return
+	}
+	if err := s.ha.TransferLeaderToEligible(addr); err != nil {
+		s.logger.Error("Leader holds no key for the designated sequencer and failed to hand off",
+			"designated", addr.Hex(), "err", err)
+	}
 }
 
 // assembleBlock calls geth Engine API to build a candidate block from the current
@@ -380,11 +414,11 @@ func (s *StateV2) assembleBlock() (*BlockV2, bool, error) {
 
 // commitBlock signs the assembled block and either commits via Raft (HA mode)
 // or applies locally and sends to broadcastCh (single-node mode).
-func (s *StateV2) commitBlock(block *BlockV2, collectedL1Msgs bool) error {
+func (s *StateV2) commitBlock(block *BlockV2, signingAddr common.Address, collectedL1Msgs bool) error {
 	t0 := time.Now()
 
 	tSign := time.Now()
-	if err := s.signBlock(block); err != nil {
+	if err := s.signBlock(block, signingAddr); err != nil {
 		s.logger.Error("Failed to sign block", "error", err)
 		return err
 	}
@@ -449,17 +483,18 @@ func (s *StateV2) commitBlock(block *BlockV2, collectedL1Msgs bool) error {
 	return nil
 }
 
-// signBlock signs the block hash with the signer.
-func (s *StateV2) signBlock(block *BlockV2) error {
+// signBlock signs the block hash with the key of signingAddr — the address
+// isActiveSequencer selected for this height.
+func (s *StateV2) signBlock(block *BlockV2, signingAddr common.Address) error {
 	if s.signer == nil {
 		return fmt.Errorf("signer not set")
 	}
-	signature, err := s.signer.Sign(block.Hash.Bytes())
+	signature, err := s.signer.SignWith(signingAddr, block.Hash.Bytes())
 	if err != nil {
-		return fmt.Errorf("failed to sign block: %w", err)
+		return fmt.Errorf("failed to sign block with %s: %w", signingAddr.Hex(), err)
 	}
 	block.Signature = signature
-	s.logger.Debug("Block signed", "number", block.Number, "hash", block.Hash.Hex(), "signer", s.signer.Address().Hex())
+	s.logger.Debug("Block signed", "number", block.Number, "hash", block.Hash.Hex(), "signer", signingAddr.Hex())
 	return nil
 }
 
